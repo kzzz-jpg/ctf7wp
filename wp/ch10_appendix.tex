@@ -1,0 +1,256 @@
+\section{附錄}
+\label{chap:appendix}
+
+\subsection{附錄 A：完整腳本（實際跑出 flag 的版本）}
+
+下面每一支都是\textbf{實際執行過、產出前面那些輸出的原檔}，
+直接從磁碟讀進來，不是我重打一遍的。要重跑就 \code{python3 檔名.py}。
+
+\subsubsection*{A-1 \file{exp/ret2win.py}}
+
+\lstinputlisting[style=pyfile]{../exp/ret2win.py}
+
+\subsubsection*{A-2 \file{exp/weakness.py}}
+
+\lstinputlisting[style=pyfile]{../exp/weakness.py}
+
+\subsubsection*{A-3 \file{exp/soul\_archive.py}}
+
+\lstinputlisting[style=pyfile]{../exp/soul_archive.py}
+
+\subsubsection*{A-4 \file{exp/soul\_vault.py}}
+
+\lstinputlisting[style=pyfile]{../exp/soul_vault.py}
+
+\subsubsection*{A-5 \file{exp/house\_of\_water.py}}
+
+\lstinputlisting[style=pyfile]{../exp/house_of_water.py}
+
+\subsubsection*{A-6 ROP 教學示範 \file{exp/rop\_demo/rop\_demo.c}}
+
+\lstinputlisting[style=c]{../exp/rop_demo/rop_demo.c}
+
+\subsubsection*{A-7 \file{exp/rop\_demo/rop\_demo.py}}
+
+\lstinputlisting[style=pyfile]{../exp/rop_demo/rop_demo.py}
+
+\subsubsection*{A-8 \file{exp/rop\_demo/align\_demo.py}（16-byte 對齊的對照實驗）}
+
+\lstinputlisting[style=pyfile]{../exp/rop_demo/align_demo.py}
+
+\subsection{附錄 B：指令速查表}
+
+\subsubsection*{B-1 靜態分析}
+
+\begin{lstlisting}[style=sh]
+# 防禦機制（pwntools 內建，不必另外裝 checksec）
+python3 -c "from pwn import *; print(ELF('chal', checksec=False).checksec())"
+
+# 看符號（函式、全域變數）與位址
+nm ./chal | grep -i win
+readelf -sW ./chal | grep FUNC
+
+# 反組譯（intel 語法，去掉機器碼比較好讀）
+objdump -d -M intel --no-show-raw-insn ./chal | less
+
+# 只看某個函式
+objdump -d -M intel --no-show-raw-insn ./chal | sed -n '/<win>:/,/^$/p'
+
+# 找字串 / 找有沒有 /bin/sh
+strings -a -t x ./chal | grep -E '/bin/sh|flag'
+
+# 找 gadget（ROP 用）
+ROPgadget --binary ./chal --only "pop|ret"
+ROPgadget --binary ./chal | grep "pop rdi"
+
+# 找 one_gadget（有 libc 時）
+one_gadget ./libc.so.6
+\end{lstlisting}
+
+\subsubsection*{B-2 gdb（建議裝 pwndbg 或 gef）}
+
+\begin{lstlisting}[style=sh]
+gdb -q ./chal
+  # 常見指令（pwndbg 語法，gef 大致相同）
+  vmmap                 # 看 PIE / heap / libc / stack 的基底
+  p/x &chunks           # 印全域變數位址
+  x/8gx &chunks         # 以 8 bytes 為單位 dump
+  x/s 0x55555555b2a0    # 當字串讀
+  telescope $rax 8      # 一路解指標往下追
+  heap chunks           # 列出所有 heap chunk（超好用）
+  tcachebins            # 看每個 tcache bin 裡有什麼
+  bins                  # 看 unsorted / small / large bins
+  break do_malloc
+  break *(do_malloc+0xc7)
+  p/x $rax
+  # 不想手動跑，直接在 pwntools 裡掛
+  # gdb.attach(io, 'b *main+0x50')
+\end{lstlisting}
+
+\begin{keybox}[\code{heap chunks} 是你的好朋友]
+只要在 pwndbg 裡打 \code{heap chunks}，它就會把整個 heap 的 chunk 由下往上列出來，
+包括 \code{tcache\_perthread\_struct}、每個 chunk 的位址、size、屬於哪個 bin。
+\textbf{第六章那些 \code{0x2a0}/\code{0x290} 的推導，我都是用這一行對答案的。}
+\end{keybox}
+
+\subsubsection*{B-3 pwntools 常用片段}
+
+\begin{lstlisting}[style=py]
+from pwn import *
+
+io = process('./chal', cwd='./dir')        # 本機
+io = remote('host', 1337)                  # 遠端
+io = gdb.debug('./chal', 'b *main+0x40')   # 直接開 gdb
+
+io.sendlineafter(b'Choice: ', b'1')        # 等到提示再送（比 sleep 可靠）
+io.recvuntil(b'> ')
+io.sendafter(b'bytes): ', raw_bytes)       # 不加換行（fread 用）
+io.recvrepeat(2)                           # 把剩下的輸出全部收乾淨（拿到 shell 後用）
+
+flat([a, b, c])                            # = p64(a)+p64(b)+p64(c)，還自動對齊
+p64(0x40125e) / u64(b'\x5e\x12\x40\0\0\0\0\0')
+
+elf = ELF('./chal', checksec=False)
+elf.symbols['win']                         # 符號位址
+elf.got['printf'] / elf.plt['system']      # GOT / PLT
+libc = ELF('./libc.so.6'); libc.symbols['system']
+
+# 找 offset（cyclic）
+io.sendline(cyclic(200))                   # 讓它爆
+core = io.corefile                         # 讀 core
+offset = cyclic_find(core.read(core.rsp, 4))
+\end{lstlisting}
+
+\begin{warnbox}[\code{cyclic\_find} 只適合「確定位址」型的爆掉]
+如果程式的 \code{win()} 不存在、你要自己組 ROP，
+\textbf{offset 請從反組譯的 \code{lea rax,[rbp-0x??]} 算}（\code{+8} = saved rbp）。
+用 cyclic 猜出來的 offset 你事後完全無法解釋，而且換編譯最佳化就錯。
+\end{warnbox}
+
+\subsubsection*{B-4 環境修復}
+
+\begin{lstlisting}[style=sh]
+# 題目附的 libc/ld 版本不對時，用 patchelf 讓執行檔吃題目附的那一組
+patchelf --set-interpreter ./ld-2.35.so --set-rpath . ./chal_patched
+# 或一行解決（會自動處理 interpreter + rpath + debug）
+pwninit
+
+# 確認 patch 後用的是哪個 libc
+ldd ./chal_patched
+python3 -c "from pwn import *; print(ELF('./chal_patched',checksec=False).libc)"
+\end{lstlisting}
+
+（踩雷過程見第 \ref{sec:toolchain} 節。）
+
+\subsection{附錄 C：Debug 心法與我踩過的雷}
+
+\subsubsection*{C-1 順序：先確認「乾淨地跑」，再打漏洞}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
+  \item \textbf{跑起來}：\code{./chal} 能不能正常選單、能不能讀到 flag 檔。
+  \item \textbf{看防禦}：\code{checksec}，決定要走 stack 還是 heap。
+  \item \textbf{找漏洞}：每個 \code{free} 問「指標清了沒」；每個輸入問「有沒有長度上限」。
+  \item \textbf{找 leak}：有沒有 \code{\%p}？沒有就想「heap 上有沒有現成的指標」。
+  \item \textbf{算 offset 與順序}：在紙上畫 stack / tcache，再動手。
+\end{enumerate}
+
+\subsubsection*{C-2 十個我實際踩過的雷}
+
+\begin{longtable}{@{}p{0.7cm}p{5.4cm}p{8.9cm}@{}}
+\toprule
+\textbf{\#} & \textbf{症狀} & \textbf{原因與解法}\\
+\midrule
+\endhead
+1 & 蓋了 payload 卻「什麼都沒發生」 & offset 少了 8（忘記 saved rbp）。\textbf{offset = buffer + 8}。\\
+2 & chain 位址全對卻 SIGSEGV & 16-byte 對齊。在 chain 前面插一個孤立的 \code{ret} gadget 推 \code{rsp} 8 bytes（第 \ref{chap:rop} 章有會真的爆的示範）。\\
+3 & leak 只有 3\textasciitilde4 bytes & \code{printf("\%s")} 被位址中間的 \code{0x00} 截斷。\textbf{這是機率問題}，寫重試迴圈，或改用 hexdump 型 leak。\\
+4 & 算出的 base 不是 \code{...000} & offset 猜錯，或抓錯 leak 的來源。\textbf{base 一定 page 對齊}，對不上就是錯。\\
+5 & \code{free(): double free detected} & glibc 2.34+ 的 tcache \code{key} 檢查。同一塊不能連兩次 free；要先 \code{malloc} 出來再 free。\\
+6 & \code{malloc(): unaligned tcache chunk detected} & poisoning 的 target 不是 16 的倍數。\code{malloc} 回傳的是 \code{chunk+0x10}，target 要對齊 16。\\
+7 & 拿到 shell 卻 \code{cat} 不到 flag & \code{cwd} 不對。用 \code{process(BIN, cwd=os.path.dirname(BIN))}。\\
+8 & 程式根本跑不起來（\code{GLIBC\_2.34 not found}） & 題目附的 libc/ld 沒被用上。見第 \ref{sec:toolchain} 節。\\
+9 & 「選單寫 2 是 A，行為卻是 B」 & 先驗證再說。我實測第四題\textbf{選單文字和行為其實一致}，差點把錯的結論寫進講義。\textbf{任何「怪異行為」都值得再跑一次確認。}\\
+10 & 以為 heap 和 PIE 有固定距離 & 沒有。ASLR 讓它們獨立（第 \ref{sec:heap-pie-independent} 節的實測表）。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[最重要的心法：把「我不知道」變成「我可以量」]
+這份講義裡的每一個數字——\code{0x2a0}、\code{0x510}、\code{0x1289}——
+都不是背下來的，是\textbf{在 gdb 裡 \code{p/x} 出來的}。
+當你卡住時，不要盯著程式碼想，打開 gdb：
+
+\begin{lstlisting}[style=sh]
+p/x &chunks          # 這個陣列在哪
+x/8gx chunks         # 每一格指到哪
+heap chunks          # 整個 heap 長什麼樣
+tcachebins           # bin 的頭是誰
+\end{lstlisting}
+
+\textbf{看一次勝過想十次。}
+\end{keybox}
+
+\subsection{附錄 D：面對新題目的檢查清單}
+
+\begin{longtable}{@{}p{0.7cm}p{13.9cm}@{}}
+\toprule
+\textbf{勾} & \textbf{檢查項目}\\
+\midrule
+\endhead
+$\square$ & \code{checksec}：Canary / NX / PIE / RELRO 各是什麼？\\
+$\square$ & 有沒有 \code{gets}、\code{scanf("\%s")}、\code{read(0,buf,很大)} 之類的\textbf{無上限輸入}？\\
+$\square$ & 有沒有「從來沒被呼叫、但會印 flag」的函式？（$\Rightarrow$ ret2win）\\
+$\square$ & 有沒有 \code{system}/\code{execve} 的 PLT，或 \code{/bin/sh} 字串？（$\Rightarrow$ 直接叫，不用 ROP）\\
+$\square$ & 沒有 \code{/bin/sh}？那能不能寫到 \code{.bss}？（第 \ref{chap:rop} 章的作法）\\
+$\square$ & 有 \code{malloc}/\code{free}/\code{edit}/\code{show} 選單？（$\Rightarrow$ heap 題）\\
+$\square$ & \textbf{每一個 \code{free}，指標有沒有被設成 NULL？}（沒有 $\Rightarrow$ UAF）\\
+$\square$ & 有沒有兩個\textbf{大小相同}的 struct？（$\Rightarrow$ type confusion）\\
+$\square$ & 有沒有任何地方印出指標（\code{\%p}）？（$\Rightarrow$ leak PIE / libc / heap）\\
+$\square$ & 沒有 \code{\%p}？heap 上有沒有現成的 code pointer 可以當字串偷出來？（第 \ref{chap:vault} 章）\\
+$\square$ & 我要寫的目標記憶體，是由\textbf{哪一個 \code{malloc} 的回傳值}決定的？（$\Rightarrow$ 算 tcache 順序）\\
+$\square$ & flag 有沒有可能\textbf{本來就在記憶體裡}？（第 \ref{chap:house} 章的作法）\\
+\bottomrule
+\end{longtable}
+
+\subsection{附錄 E：接下來可以學什麼}
+
+\begin{longtable}{@{}p{3.6cm}p{11.0cm}@{}}
+\toprule
+\textbf{主題} & \textbf{為什麼要學 / 從哪題開始}\\
+\midrule
+\endhead
+Format string & \code{printf(buf)} 系列。可以直接任意讀寫任意位址，\\
+             & 也能一發 leak 出 PIE + libc + stack。非常常見。\\
+ret2libc & 沒有現成的 \code{win()}、也沒有 \code{/bin/sh} 時：\\
+         & leak libc base $\Rightarrow$ 用 libc 裡的 \code{system} 與 \code{/bin/sh}。\\
+Unsorted bin leak & 比 tcache 大的 chunk free 之後，\code{fd}/\code{bk} 會指向\\
+                  & \code{main\_arena}（libc 裡）$\Rightarrow$ free 的 libc leak。\\
+House of X & 當 tcache poisoning 被防住（例如 pointer guard、\\
+           & safe-linking 加上更嚴的檢查）時的替代路徑。\\
+           & 從 House of Einherjar、House of Spirit 開始看。\\
+FSOP & \code{\_IO\_FILE} 導向攻擊，用來繞過 \code{exit} 或觸發 \code{system}。\\
+           & 現代 glibc 的難題，通常是 high-level 題。\\
+Kernel pwn & 完全不一樣的世界：\code{ioctl} 介面、\code{cred} 結構、\\
+           & \code{modprobe\_path}、\code{userfaultfd}。\\
+           & 建議先把 userland heap 練熟再過去。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[學習路線建議（照這個順序最省力）]
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
+  \item 把這五題不看講義再打一次（真正自己打，卡住才翻）。
+  \item 去打 \textbf{pwnable.tw 的 start / orw}、\textbf{picoCTF} 的 format string 題。
+  \item 玩 \textbf{how2heap}（shellphish 的 repo）——
+        每一種 heap 技巧都有一支獨立的小程式，跑起來看它怎麼運作。
+  \item 上 \textbf{CTFtime} 找最近比賽的 pwn 題，看別人的 writeup 對照。
+\end{enumerate}
+\end{keybox}
+
+\begin{keybox}[最後一句]
+pwn 不是「背技巧」的科目，是\textbf{「讀懂程式的假設，然後違反它」}的科目。
+
+這五題的每一個漏洞，本質上都是同一句話：
+\textbf{「程式假設某個指標指向 X，但你可以讓它指向 Y。」}
+
+你現在有六種方法讓它指向 Y。剩下的，就是多打題目，
+把「看到什麼形狀 $\Rightarrow$ 想到什麼招」變成本能。
+\end{keybox}

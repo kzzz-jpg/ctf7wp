@@ -1,0 +1,188 @@
+% =====================================================================
+%  CTF Pwn 教學講義  --  從 ret2win 打進 Heap Exploitation
+%  編譯： xelatex main.tex  (跑兩次，第二次才有正確目錄)
+% =====================================================================
+\documentclass[11pt,a4paper,fontset=none]{ctexart}
+
+\usepackage{fontspec}
+\setmonofont{JetBrains Mono}[Scale=0.85]
+\setCJKmainfont{Noto Serif CJK TC}
+\setCJKsansfont{Noto Sans CJK TC}
+\setCJKmonofont{Noto Sans Mono CJK TC}
+
+\usepackage[a4paper,top=2.3cm,bottom=2.3cm,left=2.1cm,right=2.1cm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit,backgrounds}
+\usepackage{amsmath,amssymb}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,
+            citecolor=blue!55!black,bookmarksnumbered=true]{hyperref}
+
+% ---------- 顏色 ----------
+\definecolor{codebg}{RGB}{247,247,249}
+\definecolor{codeframe}{RGB}{205,205,215}
+\definecolor{kw}{RGB}{0,90,170}
+\definecolor{cmt}{RGB}{35,130,80}
+\definecolor{str}{RGB}{190,80,0}
+\definecolor{hl}{RGB}{225,240,255}
+\definecolor{warnbg}{RGB}{255,246,230}
+\definecolor{warnfr}{RGB}{230,150,40}
+\definecolor{keybg}{RGB}{235,247,240}
+\definecolor{keyfr}{RGB}{40,160,100}
+\definecolor{whybg}{RGB}{240,242,255}
+\definecolor{whyfr}{RGB}{90,110,220}
+
+% ---------- 程式碼樣式 ----------
+\lstdefinestyle{base}{
+  basicstyle=\ttfamily\footnotesize,
+  commentstyle=\color{cmt}\itshape,
+  keywordstyle=\color{kw}\bfseries,
+  stringstyle=\color{str},
+  numberstyle=\tiny\color{gray},
+  numbers=left, numbersep=7pt,
+  breaklines=true, breakatwhitespace=false,
+  frame=single, rulecolor=\color{codeframe},
+  backgroundcolor=\color{codebg},
+  showstringspaces=false, tabsize=4, upquote=true,
+  columns=fullflexible, keepspaces=true,
+  xleftmargin=18pt, framexleftmargin=18pt,
+  aboveskip=8pt, belowskip=8pt,
+  literate={→}{{$\rightarrow$}}1 {≫}{{$\gg$}}1 {─}{{-}}1
+}
+\lstdefinestyle{py}{style=base,language=Python}
+\lstdefinestyle{c}{style=base,language=C}
+\lstdefinestyle{sh}{style=base,language=bash,numbers=none,xleftmargin=10pt,framexleftmargin=10pt}
+\lstdefinestyle{asm}{style=base,language={[x86masm]Assembler}}
+\lstdefinestyle{raw}{style=base,numbers=none,xleftmargin=10pt,framexleftmargin=10pt}
+\lstdefinestyle{pyfile}{style=py,numbers=left}
+
+\lstset{style=base}
+
+% ---------- 提示框 ----------
+\newtcolorbox{keybox}[1][重點]{
+  enhanced,breakable,colback=keybg,colframe=keyfr,
+  fonttitle=\bfseries\sffamily,title={\faIcon\ #1},
+  boxrule=0.8pt,left=6pt,right=6pt,top=5pt,bottom=5pt,
+  arc=2pt, attach boxed title to top left={xshift=8pt,yshift=-2pt},
+  boxed title style={colback=keyfr,colframe=keyfr,arc=2pt},
+  }
+\newtcolorbox{warnbox}[1][陷阱]{
+  enhanced,breakable,colback=warnbg,colframe=warnfr,
+  fonttitle=\bfseries\sffamily,title={#1},
+  boxrule=0.8pt,left=6pt,right=6pt,top=5pt,bottom=5pt,arc=2pt,
+  attach boxed title to top left={xshift=8pt,yshift=-2pt},
+  boxed title style={colback=warnfr,colframe=warnfr,arc=2pt},
+  }
+\newtcolorbox{whybox}[1][為什麼]{
+  enhanced,breakable,colback=whybg,colframe=whyfr,
+  fonttitle=\bfseries\sffamily,title={#1},
+  boxrule=0.8pt,left=6pt,right=6pt,top=5pt,bottom=5pt,arc=2pt,
+  attach boxed title to top left={xshift=8pt,yshift=-2pt},
+  boxed title style={colback=whyfr,colframe=whyfr,arc=2pt},
+  }
+\newcommand{\faIcon}{}
+
+% ---------- 版面 ----------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily CTF Pwn 教學講義}
+\fancyhead[R]{\small\sffamily\leftmark}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\contentsname}{目錄}
+\renewcommand{\refname}{參考資料}
+\setlength{\headheight}{13pt}
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{0pt}
+\linespread{1.12}
+
+% \code{} 要能直接吃 identifier 與運算符，不必手寫 \_ \^ 等：
+% 讓 _ ^ & # 在參數被 tokenize 之前就變成普通字元（catcode 12）。
+% 這些都是「tokenize 時」才生效的 catcode，所以在 \code 展開後、
+% 讀取參數之前改掉，就來得及。注意 % 不能這樣搞 —— TeX 讀入整行時
+% 就依當下的 catcode 砍掉註解，比 \code 展開還早，所以 % 一律寫成 \%。
+%
+% \codebrk 額外做兩件事：
+%   1. 把空白換成 \c_space_tl —— expl3 的 mapping 會「吃掉」空白，
+%      不換的話 \code{return address} 會印成 "returnaddress"。
+%   2. 在每個字元後面插 \allowbreak，讓長識別字（例如
+%      malloc_consolidate）可以在行尾斷開。否則 \texttt 是
+%      不可斷的方塊，長一點就會 Overfull \hbox 凸出邊界。
+\ExplSyntaxOn
+\cs_new_protected:Npn \codebrk #1
+  {
+    \tl_set:Nn \l_tmpa_tl {#1}
+    \tl_replace_all:Nnn \l_tmpa_tl { ~ } { \c_space_tl }
+    \tl_map_inline:Nn \l_tmpa_tl { ##1 \allowbreak }
+  }
+\ExplSyntaxOff
+
+\makeatletter
+\def\code{\begingroup\catcode`\_=12 \catcode`\^=12 \catcode`\&=12
+           \catcode`\#=12 \code@a}
+\def\code@a#1{\texttt{\color{kw!80!black}\codebrk{#1}}\endgroup}
+\makeatother
+\newcommand{\addr}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\texttt{#1}}
+
+\title{\bfseries CTF Pwn 教學講義\\[4pt]
+       \large 從 ret2win 打進 Heap Exploitation\\[10pt]
+       \normalsize\normalfont 五題完整解法 + 觀念拆解}
+\author{}
+\date{}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{3.2cm}
+{\Huge\bfseries\sffamily CTF Pwn 教學講義\par}
+\vspace{10pt}
+{\LARGE\sffamily 從 ret2win 打進 Heap Exploitation\par}
+\vspace{6pt}
+{\large\sffamily 五題完整解法 $\cdot$ 觀念從零拆解\par}
+\vspace{28pt}
+{\large\sffamily 涵蓋題目\par}
+\vspace{8pt}
+{\large
+\begin{tabular}{ll}
+\toprule
+\textbf{題目} & \textbf{主題}\\
+\midrule
+1. ret2win          & 堆疊溢位、控 return address\\
+2. weakness         & ret2win 變化、找 offset\\
+3. soul-archive-thanos & UAF、type confusion、PIE leak\\
+4. soul-vault-collector & UAF、偽造物件、洩漏沒有 \%p 的 PIE\\
+5. house-of-water   & UAF、tcache poisoning、讀 heap 上的 flag\\
+\bottomrule
+\end{tabular}\par}
+\vspace{34pt}
+{\large\sffamily 附加：一條真的 ROP chain 實作\par}
+\vfill
+{\small\sffamily 本講義所有腳本皆已實際執行並取得 flag\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+\input{ch01_env}
+\input{ch02_basics}
+\input{ch03_ret2win}
+\input{ch04_weakness}
+\input{ch05_rop}
+\input{ch06_heap}
+\input{ch07_soul_archive}
+\input{ch08_soul_vault}
+\input{ch09_house}
+\input{ch10_appendix}
+
+\end{document}

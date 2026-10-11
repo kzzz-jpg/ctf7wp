@@ -1,0 +1,218 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand*\HyPL@Entry[1]{}
+\HyPL@Entry{0<</S/D>>}
+\HyPL@Entry{1<</S/r>>}
+\gdef \LT@i {\LT@entry 
+    {1}{105.58464pt}\LT@entry 
+    {1}{333.20668pt}}
+\gdef \LT@ii {\LT@entry 
+    {1}{79.97733pt}\LT@entry 
+    {1}{358.814pt}}
+\HyPL@Entry{4<</S/D>>}
+\@writefile{toc}{\contentsline {section}{\numberline {1}開始之前：環境與工具}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}你需要準備什麼}{1}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}五個防禦機制速查}{1}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}第一步：看防禦機制}{2}{subsection.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}踩雷實錄：題目附的 ld 跟 libc 版本不一致}{2}{subsection.1.4}\protected@file@percent }
+\newlabel{sec:toolchain}{{1.4}{2}{踩雷實錄：題目附的 ld 跟 libc 版本不一致}{subsection.1.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.1}症狀}{2}{subsubsection.1.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.2}診斷}{2}{subsubsection.1.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.3}解法：自己湊一組版本一致的 toolchain}{3}{subsubsection.1.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.5}每一題的固定開場}{4}{subsection.1.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}基礎：程式在記憶體裡長什麼樣}{4}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}x86-64 的呼叫約定（System V ABI）}{4}{subsection.2.1}\protected@file@percent }
+\gdef \LT@iii {\LT@entry 
+    {1}{97.04872pt}\LT@entry 
+    {1}{341.7426pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Stack frame：一個函式的長相}{5}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}為什麼 overflow 就能控制 rip}{5}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}怎麼找 offset？三種方法}{6}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}再深入一點：每個防禦機制實際上在做什麼}{6}{subsection.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.1}Canary}{6}{subsubsection.2.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.2}PIE 與 leak}{6}{subsubsection.2.5.2}\protected@file@percent }
+\gdef \LT@iv {\LT@entry 
+    {1}{102.73918pt}\LT@entry 
+    {1}{336.05214pt}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.3}ASLR：heap 基底和 PIE 基底沒有關係}{7}{subsubsection.2.5.3}\protected@file@percent }
+\newlabel{sec:heap-pie-independent}{{2.5.3}{7}{ASLR：heap 基底和 PIE 基底沒有關係}{subsubsection.2.5.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.4}NX 與 ROP}{7}{subsubsection.2.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.5}RELRO 與 GOT}{7}{subsubsection.2.5.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}第一題：ret2win}{7}{section.3}\protected@file@percent }
+\newlabel{chap:ret2win}{{3}{7}{第一題：ret2win}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}題目給了什麼}{8}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}逆一下：程式只有三件事}{8}{subsection.3.2}\protected@file@percent }
+\gdef \LT@v {\LT@entry 
+    {1}{125.50148pt}\LT@entry 
+    {1}{313.28984pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}三個關鍵數字}{9}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}offset 為什麼是 buffer + 8}{9}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}組出 payload}{9}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}那個多出來的 ret 是幹什麼的}{9}{subsection.3.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}完整腳本}{10}{subsection.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}執行結果}{10}{subsection.3.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}第二題：weakness（soul-stone）}{11}{section.4}\protected@file@percent }
+\newlabel{chap:weakness}{{4}{11}{第二題：weakness（soul-stone）}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}先看防禦機制}{11}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}程式結構}{11}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}目標：\texttt  {soul\_stone()}}{12}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}腳本}{12}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}執行結果}{13}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}這題多學到的一件事：offset 要用組語驗證}{13}{subsection.4.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}專題課 A：從零開始的 ROP}{13}{section.5}\protected@file@percent }
+\newlabel{chap:rop}{{5}{13}{專題課 A：從零開始的 ROP}{section.5}{}}
+\gdef \LT@vi {\LT@entry 
+    {1}{136.88284pt}\LT@entry 
+    {1}{103.04872pt}\LT@entry 
+    {1}{205.16928pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}為什麼 ret2win 不夠用}{14}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}關鍵：\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {ret}}\endgroup  是一個「從 stack 讀位址的跳躍」}{14}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}gadget：以 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {ret}}\endgroup  結尾的小片段}{14}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}一個真的 ROP chain：逐步拆解}{15}{subsection.5.4}\protected@file@percent }
+\gdef \LT@vii {\LT@entry 
+    {1}{153.95424pt}\LT@entry 
+    {1}{97.35826pt}\LT@entry 
+    {1}{193.78836pt}}
+\gdef \LT@viii {\LT@entry 
+    {1}{45.83368pt}\LT@entry 
+    {1}{131.50148pt}\LT@entry 
+    {1}{273.45572pt}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.1}chain 的內容}{16}{subsubsection.5.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}16-byte 對齊：一個真的會爆的示範}{17}{subsection.5.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}完整腳本與輸出}{17}{subsection.5.6}\protected@file@percent }
+\gdef \LT@ix {\LT@entry 
+    {1}{74.28644pt}\LT@entry 
+    {1}{142.88284pt}\LT@entry 
+    {1}{233.62204pt}}
+\gdef \LT@x {\LT@entry 
+    {1}{108.43008pt}\LT@entry 
+    {1}{330.36124pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.7}真實題目的 gadget 從哪裡來}{18}{subsection.5.7}\protected@file@percent }
+\newlabel{sec:ret2csu}{{5.7}{18}{真實題目的 gadget 從哪裡來}{subsection.5.7}{}}
+\gdef \LT@xi {\LT@entry 
+    {1}{97.04872pt}\LT@entry 
+    {1}{341.7426pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}專題課 B：Heap 基礎}{19}{section.6}\protected@file@percent }
+\newlabel{chap:heap}{{6}{19}{專題課 B：Heap 基礎}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}為什麼要懂 heap}{19}{subsection.6.1}\protected@file@percent }
+\gdef \LT@xii {\LT@entry 
+    {1}{102.73918pt}\LT@entry 
+    {1}{108.73918pt}\LT@entry 
+    {1}{239.3125pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}malloc 不是「配一塊剛好大的」}{20}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}free 之後 chunk 裡長什麼樣}{20}{subsection.6.3}\protected@file@percent }
+\gdef \LT@xiii {\LT@entry 
+    {1}{119.81102pt}\LT@entry 
+    {1}{318.9803pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}tcache bins 速查}{21}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}safe-linking：fd 不是指標，而是「加密過的」指標}{21}{subsection.6.5}\protected@file@percent }
+\newlabel{sec:safelink}{{6.5}{21}{safe-linking：fd 不是指標，而是「加密過的」指標}{subsection.6.5}{}}
+\gdef \LT@xiv {\LT@entry 
+    {1}{108.43008pt}\LT@entry 
+    {1}{330.36124pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {tcache\_perthread\_struct}}\endgroup ：heap 的第一塊}{22}{subsection.6.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}三種 heap 攻擊的名字}{22}{subsection.6.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.8}兩道 glibc 的「防呆」你一定要知道}{23}{subsection.6.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.1}double free 偵測（glibc 2.34+）}{23}{subsubsection.6.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.2}16-byte 對齊檢查}{23}{subsubsection.6.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.9}本課小結：把 heap 攻擊想成「改一張紙條」}{23}{subsection.6.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}第三題：soul-archive-thanos}{23}{section.7}\protected@file@percent }
+\newlabel{chap:archive}{{7}{23}{第三題：soul-archive-thanos}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}防禦機制與整體形狀}{23}{subsection.7.1}\protected@file@percent }
+\gdef \LT@xv {\LT@entry 
+    {1}{102.73918pt}\LT@entry 
+    {1}{336.05214pt}}
+\gdef \LT@xvi {\LT@entry 
+    {1}{91.35826pt}\LT@entry 
+    {1}{85.97733pt}\LT@entry 
+    {1}{273.45572pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}資料結構：Soul}{24}{subsection.7.2}\protected@file@percent }
+\gdef \LT@xvii {\LT@entry 
+    {1}{136.88284pt}\LT@entry 
+    {1}{301.90848pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}PIE leak：題目自己給的}{25}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}目標：\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {soul\_ascension()}}\endgroup  的四個條件}{25}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}type confusion：TransferRecord 蓋到 Soul}{25}{subsection.7.5}\protected@file@percent }
+\gdef \LT@xviii {\LT@entry 
+    {1}{74.28644pt}\LT@entry 
+    {1}{137.19194pt}\LT@entry 
+    {1}{131.19194pt}}
+\gdef \LT@xix {\LT@entry 
+    {1}{34.45274pt}\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{262.0748pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}攻擊計畫}{26}{subsection.7.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.7}完整腳本}{27}{subsection.7.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.8}執行結果}{28}{subsection.7.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.9}這一題要帶走的三件事}{29}{subsection.7.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}第四題：soul-vault-collector}{29}{section.8}\protected@file@percent }
+\newlabel{chap:vault}{{8}{29}{第四題：soul-vault-collector}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}防禦機制與選單}{29}{subsection.8.1}\protected@file@percent }
+\gdef \LT@xx {\LT@entry 
+    {1}{91.35826pt}\LT@entry 
+    {1}{85.97733pt}\LT@entry 
+    {1}{273.45572pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Soul 的長相}{30}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}三個 bug}{30}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.1}bug 1：\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {release\_soul}}\endgroup  不把指標清掉 $\Rightarrow $ UAF}{30}{subsubsection.8.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.2}bug 2：\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {capture\_soul}}\endgroup  把輸入寫進 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {soul->memory}}\endgroup  指的地方}{30}{subsubsection.8.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.3}bug 3：\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {inspect\_soul}}\endgroup  是任意讀 + 任意呼叫}{31}{subsubsection.8.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}第一步：從 heap 上 leak 出 heap 基底}{31}{subsection.8.4}\protected@file@percent }
+\gdef \LT@xxi {\LT@entry 
+    {1}{40.14322pt}\LT@entry 
+    {1}{165.6447pt}\LT@entry 
+    {1}{245.00298pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}第二步：讓 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {malloc}}\endgroup  把記憶體配到「別的 Soul」身上}{32}{subsection.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.6}第三步：forge \#1 —— 用「讀字串」偷出 PIE}{32}{subsection.8.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.7}第四步：forge \#2 —— 把 callback 換成 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {system@plt}}\endgroup }{33}{subsection.8.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.8}完整的 heap 佈局圖（動手前先畫這張）}{33}{subsection.8.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.9}完整腳本}{34}{subsection.8.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.10}執行結果}{36}{subsection.8.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.11}這一題要帶走的三件事}{36}{subsection.8.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}第五題：house-of-water}{37}{section.9}\protected@file@percent }
+\newlabel{chap:house}{{9}{37}{第五題：house-of-water}{section.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}防禦機制}{37}{subsection.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}全域陣列與選單}{37}{subsection.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {setup()}}\endgroup ：flag 的第一站}{37}{subsection.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.4}四個功能各自的問題}{38}{subsection.9.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.4.1}\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {do\_free}}\endgroup ：就是 UAF 本身}{38}{subsubsection.9.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.4.2}\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {check\_bounds}}\endgroup ：那個 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {-0x10}}\endgroup  的「禮物」}{38}{subsubsection.9.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.4.3}\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {do\_edit}}\endgroup  與 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {do\_show}}\endgroup ：純粹的讀寫原語}{39}{subsubsection.9.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.5}複習：tcache 與 safe-linking}{40}{subsection.9.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.6}步驟一：兩個同 bin 的兄弟，從 \begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {fd}}\endgroup  反推 heap}{40}{subsection.9.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.7}步驟二：tcache poisoning}{41}{subsection.9.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.8}步驟三：兩次 malloc，第二次就拿到 flag}{41}{subsection.9.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.9}步驟四：\begingroup \catcode `\_=12 \catcode `\^=12 \catcode `\&=12 \catcode `\#=12 \texttt  {\color  {kw!80!black}\codebrk {show}}\endgroup  出 flag}{42}{subsection.9.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.10}完整腳本}{42}{subsection.9.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.11}執行結果}{44}{subsection.9.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.12}「House of \dots  」是什麼？}{44}{subsection.9.12}\protected@file@percent }
+\gdef \LT@xxii {\LT@entry 
+    {1}{131.19194pt}\LT@entry 
+    {1}{307.59938pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.13}這一題要帶走的三件事}{45}{subsection.9.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}附錄}{45}{section.10}\protected@file@percent }
+\newlabel{chap:appendix}{{10}{45}{附錄}{section.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}附錄 A：完整腳本（實際跑出 flag 的版本）}{45}{subsection.10.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/ret2win.py}{45}{lstlisting.-106}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/weakness.py}{46}{lstlisting.-107}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/soul\textunderscore archive.py}{46}{lstlisting.-108}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/soul\textunderscore vault.py}{49}{lstlisting.-109}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/house\textunderscore of\textunderscore water.py}{52}{lstlisting.-110}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/rop\textunderscore demo/rop\textunderscore demo.c}{54}{lstlisting.-111}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/rop\textunderscore demo/rop\textunderscore demo.py}{55}{lstlisting.-112}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{../exp/rop\textunderscore demo/align\textunderscore demo.py}{55}{lstlisting.-113}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}附錄 B：指令速查表}{56}{subsection.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}附錄 C：Debug 心法與我踩過的雷}{57}{subsection.10.3}\protected@file@percent }
+\gdef \LT@xxiii {\LT@entry 
+    {1}{25.91684pt}\LT@entry 
+    {1}{165.6447pt}\LT@entry 
+    {1}{259.22934pt}}
+\gdef \LT@xxiv {\LT@entry 
+    {1}{25.91684pt}\LT@entry 
+    {1}{401.49312pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.4}附錄 D：面對新題目的檢查清單}{58}{subsection.10.4}\protected@file@percent }
+\gdef \LT@xxv {\LT@entry 
+    {1}{108.43008pt}\LT@entry 
+    {1}{318.9803pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.5}附錄 E：接下來可以學什麼}{59}{subsection.10.5}\protected@file@percent }
+\gdef \@abspage@last{63}

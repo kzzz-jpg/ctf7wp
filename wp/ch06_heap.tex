@@ -1,0 +1,273 @@
+\section{專題課 B：Heap 基礎}
+\label{chap:heap}
+
+後面三題全部是 heap 題。這一章把 \code{malloc}/\code{free} 背後的規則講清楚，
+你才看得懂為什麼「改一個 8 bytes 的 \code{fd}」可以讓下次 \code{malloc} 回傳任意位址。
+
+\subsection{為什麼要懂 heap}
+
+\begin{longtable}{@{}p{3.2cm}p{11.8cm}@{}}
+\toprule
+\textbf{你看到的} & \textbf{你該想到的}\\
+\midrule
+\endhead
+\code{Canary found} + \code{PIE enabled} &
+  Stack overflow 幾乎不用想了（canary 擋住、位址又不固定）。
+  題目通常會給你 \code{malloc/free/edit/show} 選單 $\Rightarrow$ \textbf{這是 heap 題}。\\
+選單有 \code{free} 但指標沒清 & \textbf{UAF}（use-after-free）。這是五題裡三題的根。\\
+\code{show} 能印出內容 & 你能讀 free 掉的 chunk $\Rightarrow$ \textbf{leak}（heap base、libc、PIE）。\\
+\code{edit} 能寫 free 掉的 chunk & 你能改 \code{fd} $\Rightarrow$ \textbf{tcache poisoning}。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[本課的目標]
+讀完你應該能回答這四個問題：
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{malloc(0x38)} 背後實際吃掉多少 bytes？\\
+  \item \code{free} 完之後，那塊記憶體裡被寫了什麼？\\
+  \item 為什麼從 \code{fd} 可以算出 heap 基底？\\
+  \item 為什麼 \code{free} 兩次一樣大的 chunk 會被偵測到，而「free A、free B、free A」不會？
+\end{enumerate}
+\end{keybox}
+
+\subsection{malloc 不是「配一塊剛好大的」}
+
+每次 \code{malloc(n)}，glibc 會給你一塊\textbf{帶標頭的} chunk。標頭 16 bytes：
+\code{prev\_size}（8）與 \code{size}（8）。\code{malloc} 回傳的是\textbf{標頭之後}的位址。
+
+\begin{center}
+\begin{tikzpicture}[font=\ttfamily\small,node distance=0pt,
+                    every node/.style={draw,minimum width=7.0cm,minimum height=0.55cm}]
+  \node[fill=blue!12] (ps) {prev\_size};
+  \node[fill=blue!12,below=of ps] (sz) {size};
+  \node[fill=green!14,below=of sz,minimum height=1.5cm] (us) {user data};
+  \node[fill=blue!12,below=of us] (nx) {下一塊的 prev\_size};
+  \draw[->,thick,red] ($(sz.south west)+(-0.85,-0.7)$) -- ($(us.north west)+(-0.85,0.0)$);
+\end{tikzpicture}
+\end{center}
+
+也就是：
+\[
+\text{chunk 位址} \xrightarrow{+0x8} \text{size}
+\xrightarrow{+0x10} \textbf{malloc 回傳的位址}
+\]
+
+\begin{keybox}[size 的算法]
+\[
+\text{chunk size} = (\text{request} + 8 + 15)\ \&\ \sim 15
+\]
+
+白話：\textbf{request 加上標頭，再無條件進位到 16 的倍數}。而且最小是 \code{0x20}。
+\end{keybox}
+
+\begin{longtable}{@{}p{3.4cm}p{3.4cm}p{8.2cm}@{}}
+\toprule
+\textbf{\code{malloc(n)}} & \textbf{chunk size} & \textbf{你會在哪一題看到}\\
+\midrule
+\endhead
+\code{0x18} & \code{0x20} & 最小 chunk。\\
+\code{0x20} & \code{0x30} & soul-vault 的 \code{name}（\code{read\_string(name, 0x20)}）。\\
+\code{0x38} & \code{0x40} & soul-vault 偽造 Soul 時用的 \code{size=0x38}。\\
+\code{0x40} & \code{0x50} & soul-archive 的 Soul 與 TransferRecord（\code{malloc(0x40)}）。\\
+\code{0x100} & \code{0x110} & house-of-water 的兩個 chunk。\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[最常見的計算錯誤]
+「我 \code{malloc(0x40)}，所以 tcache bin 是 \code{0x40}」$\Rightarrow$ \textbf{錯}，是 \code{0x50}。
+\textbf{bin 的名稱一律是 chunk size（含標頭），不是 request。}
+後面 house-of-water 那題我們要「毒 \code{0x100} 的 bin」，實際上動的是 \code{0x110} 的鏈。
+\end{warnbox}
+
+\subsection{free 之後 chunk 裡長什麼樣}
+
+chunk 被 \code{free} 之後，glibc 會拿它的\textbf{前 16 bytes（也就是原本的 user data）}來做紀錄：
+
+\begin{center}
+\begin{tikzpicture}[font=\ttfamily\small,node distance=0pt,
+                    every node/.style={draw,minimum width=7.0cm,minimum height=0.55cm}]
+  \node[fill=blue!12] (h1) {prev\_size};
+  \node[fill=blue!12,below=of h1] (h2) {size};
+  \node[fill=orange!18,below=of h2] (f1) {fd（在 tcache = next 指標）};
+  \node[fill=orange!18,below=of f1] (f2) {key（glibc 2.34+ 的 double-free 標記）};
+\end{tikzpicture}
+\end{center}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{fd}：指向「同一個 bin 裡下一塊」。
+  \item \code{key}：glibc 2.34 之後寫入的隨機值（\code{tcache\_key}）。
+        \textbf{同一個行程裡每一塊的 key 都一樣}，見下面的實測。
+\end{itemize}
+
+實測（house-of-water，兩個 \code{0x100} chunk，先 free A 再 free B）：
+
+\begin{lstlisting}[style=raw]
+A 的 user data: 1c 28 83 5a 05 00 00 00 | b2 3a 81 8d 51 23 42 2c
+B 的 user data: 0c ed 02 68 ad 55 00 00 | b2 3a 81 8d 51 23 42 2c
+                  ^^^^ fd ^^^^            ^^^^ key（兩塊相同）^^^^
+\end{lstlisting}
+
+\begin{keybox}[LIFO：後 free 的排在前面]
+tcache 是\textbf{後進先出}的單向鏈。\code{free(A); free(B);} 之後：
+
+\begin{lstlisting}[style=raw]
+tcache[0x110] 的頭  ->  B  ->  A  ->  NULL
+\end{lstlisting}
+
+所以下一次 \code{malloc(0x100)} 會先拿到 \textbf{B}，再一次才拿到 \textbf{A}。
+每個 bin 最多存 \textbf{7 塊}，第 8 塊會被丟到別的 bin（fastbin/unsorted），
+但本系列三題都只用到 7 塊以內。
+\end{keybox}
+
+\subsection{tcache bins 速查}
+
+\begin{longtable}{@{}p{4.0cm}p{11.0cm}@{}}
+\toprule
+\textbf{項目} & \textbf{數值}\\
+\midrule
+\endhead
+bin 的數量 & 64 個\\
+bin 的間隔 & \code{0x10}（因為 chunk size 一定是 16 的倍數）\\
+bin 的範圍 & \code{0x20} \verb|~| \code{0x410}\\
+每個 bin 的容量 & 7 塊\\
+順序 & LIFO\\
+\bottomrule
+\end{longtable}
+
+\textbf{bin 怎麼選}：拿 chunk size 直接當索引。\code{malloc(0x100)} 產生 \code{0x110} 的 chunk
+$\Rightarrow$ 進 \code{tcache[0x110]}。
+
+\subsection{safe-linking：fd 不是指標，而是「加密過的」指標}
+\label{sec:safelink}
+
+glibc 2.32 之後，tcache 的 \code{fd} 被寫成：
+
+\[
+\boxed{\texttt{fd} = \texttt{next}\ \oplus\ (\texttt{這塊 chunk 的位址} \gg 12)}
+\]
+
+（原始碼裡的巨集叫 \code{PROTECT\_PTR}；要解回來叫 \code{REVEAL\_PTR}。）
+
+\begin{whybox}[這個設計的用意與「副作用」]
+\textbf{用意}：位址被 \code{>> 12} 混過，所以 \code{fd} 本身\textbf{不是一個合法指標}。
+傳統「直接把 \code{fd} 改成目標位址」的攻擊因此失效——你必須先知道「這塊 chunk 在哪」。
+
+\textbf{副作用（也就是我們的機會）}：因為 \code{>> 12}，\textbf{高位 28 bits 是保留的}。
+所以從一個 \code{fd} 就能反推\textbf{頁碼}，也就是 heap 的位址範圍。這正是 leak 的來源。
+\end{whybox}
+
+實測（同一組資料，接著上面的 house-of-water）：
+
+\begin{lstlisting}[style=raw]
+fd_a = 0x000000055a83281c        # A 是 bin 裡的第一塊 -> next = NULL
+fd_b = 0x000055ad6802ed0c        # B 的 fd = A ^ (B >> 12)
+\end{lstlisting}
+
+\begin{keybox}[怎麼從這兩個數字算出所有位址]
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{fd\_a} 是 \code{NULL ^ (A >> 12)}，所以 \textbf{\code{A >> 12} = \code{fd\_a}}。
+  \item 於是 \code{heap = fd\_a << 12}（得到 \code{0x55a83281c000}）。
+  \item \code{fd\_b = A ^ (B >> 12)}。因為 A 與 B 在同一頁（\code{B >> 12 == A >> 12}），
+        所以 \code{A = fd\_b ^ fd\_a}（得到 \code{0x55a83281c510}）。
+\end{enumerate}
+
+驗證：\code{A - heap = 0x510}，也就是「A 是 heap 的第 \code{0x510} 個 byte」。
+\textbf{所有位址都有了，而且完全不需要 \code{\%p}。}
+\end{keybox}
+
+\begin{warnbox}[讀 leak 的時候要小心 \code{0x00}]
+\code{fd} 的 bit 47 以上是 0，所以字串輸出會被 \code{0x00} 截斷。
+你只會拿到 \textbf{5 或 6 bytes}。用 \code{u64(raw.ljust(8, b'\textbackslash x00'))} 補齊就對了。
+（後面的腳本都有一行 \code{len(raw) != 5} 的檢查，就是這個原因。）
+\end{warnbox}
+
+\subsection{\code{tcache\_perthread\_struct}：heap 的第一塊}
+
+\begin{keybox}[記住這個常數：\code{0x290}]
+程式\textbf{第一次呼叫 \code{malloc}} 時，glibc 會偷偷先配一塊
+\code{tcache\_perthread\_struct}（大小 \code{0x290}，裡面是那 64 個 bin 的鏈頭與計數器）。
+它就落在 heap 的開頭。
+
+\begin{lstlisting}[style=raw]
+heap + 0x000   chunk header (prev_size, size)
+heap + 0x010   tcache_perthread_struct 的內容 ... 一直用到
+heap + 0x290   <-- 這一塊結束，下一個 chunk 的標頭在這裡
+heap + 0x2a0   <-- 下一個 chunk 的 user data = 程式「第一次 malloc」拿到的位址
+\end{lstlisting}
+
+所以：\textbf{程式第一個 \code{malloc} 的回傳值 = \code{heap + 0x2a0}}。
+\end{keybox}
+
+\begin{whybox}[house-of-water 為什麼要靠這個常數]
+那題把 flag 讀進了\textbf{第一個 heap 配置}，也就是 \code{heap+0x2a0}。
+我們的目標就是「讓 \code{malloc} 回傳 \code{heap+0x2a0}」，然後 \code{show} 它。
+知道 \code{0x290} 這個常數，才知道要毒到哪裡去。第 \ref{chap:house} 章會完整走一遍。
+\end{whybox}
+
+\subsection{三種 heap 攻擊的名字}
+
+\begin{longtable}{@{}p{3.6cm}p{11.4cm}@{}}
+\toprule
+\textbf{名稱} & \textbf{定義與在五題裡的位置}\\
+\midrule
+\endhead
+\textbf{UAF}（use-after-free） &
+  \code{free(ptr)} 之後 \code{ptr} 沒有被清成 \code{NULL}，
+  於是程式還留著一個指向已釋放記憶體的\textbf{懸空指標}。
+  你透過它讀 $\Rightarrow$ leak；透過它寫 $\Rightarrow$ 改 \code{fd}。
+  \textbf{三題的根（soul-archive、soul-vault、house-of-water）。}\\
+\textbf{Type confusion}（型別混淆） &
+  兩個\textbf{大小相同的結構}共用同一塊記憶體，但欄位意義不同。
+  你以為在寫「A 的欄位」，其實蓋到「B 的函式指標」。
+  \textbf{soul-archive 與 soul-vault 都用這招。}\\
+\textbf{Tcache poisoning} &
+  改掉 free chunk 的 \code{fd}，讓下一次 \code{malloc} 回傳你指定的位址。
+  \textbf{house-of-water 的主菜。}\\
+\bottomrule
+\end{longtable}
+
+\subsection{兩道 glibc 的「防呆」你一定要知道}
+
+\subsubsection{double free 偵測（glibc 2.34+）}
+
+\code{free} 一個 chunk 時，glibc 會把它放進 tcache 並在 \code{user+8} 寫入 \code{key}。
+如果\textbf{同一個 chunk} 連續被 free 兩次，第二次會發現 bin 裡已經有一塊 key 相同的，
+於是報錯：
+
+\begin{lstlisting}[style=raw]
+free(): double free detected in tcache 2
+\end{lstlisting}
+
+\begin{keybox}[所以「free 兩次」其實是可以的，只要不是同一塊]
+\begin{lstlisting}[style=raw]
+free(A); free(A);            -> 爆炸（double free）
+free(A); free(B); free(A);   -> 沒事，tcache[..] = A -> B -> A
+\end{lstlisting}
+第二種情況下 A 確實出現兩次（這是可以拿去利用的），但 glibc 只檢查「連續」。
+這也是為什麼 soul-vault 要「release(1)、release(0)」這樣交錯地釋放。
+\end{keybox}
+
+\subsubsection{16-byte 對齊檢查}
+
+\code{malloc} 從 tcache 取塊時會檢查「這塊的位址是不是 16 的倍數」。
+你在做 tcache poisoning 時，如果目標位址沒對齊，就會看到：
+
+\begin{lstlisting}[style=raw]
+malloc(): unaligned tcache chunk detected
+\end{lstlisting}
+
+\begin{warnbox}[所以毒 \code{fd} 時目標要對齊]
+這也是為什麼 house-of-water 挑的目標是 \code{heap + 0x290}（標頭）而不是 \code{heap + 0x295} 之類的：
+\code{0x290} 是 16 的倍數，取出來的 user 位址 \code{0x2a0} 也是。
+\end{warnbox}
+
+\subsection{本課小結：把 heap 攻擊想成「改一張紙條」}
+
+\begin{keybox}[一句話]
+\code{malloc} 的邏輯是「\textbf{去看 bin 的頭，把那塊給你，並把頭換成它 \code{fd} 寫的下一塊}」。
+所以只要你能改 \code{fd}，你就能決定\textbf{下一次 malloc 給你哪一塊}。
+
+三個名詞其實是同一件事的三個步驟：
+\textbf{UAF 讓你寫得進去} $\Rightarrow$ \textbf{type confusion 讓寫入落在有用的欄位上}
+$\Rightarrow$ \textbf{poisoning 讓 malloc 吐給你想要的位址}。
+\end{keybox}

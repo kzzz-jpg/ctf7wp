@@ -1,0 +1,199 @@
+\section{基礎：程式在記憶體裡長什麼樣}
+
+這一章的每一個觀念，後面五題都會用到。如果你只懂 ret2win，這一章會把「為什麼能打」講清楚；
+如果你要打 heap，這一章的 stack 圖仍然是最重要的對照組。
+
+\subsection{x86-64 的呼叫約定（System V ABI）}
+
+\begin{longtable}{@{}p{3.2cm}p{11.8cm}@{}}
+\toprule
+\textbf{東西} & \textbf{規定}\\
+\midrule
+\endhead
+參數傳遞 &
+  前六個整數/指標參數放在 \code{rdi, rsi, rdx, rcx, r8, r9}，之後才堆到 stack。
+  回傳值放 \code{rax}。\\
+\code{rsp} & stack pointer，指向 stack 最頂端（\textbf{位址最小}的那一端）。\\
+\code{rbp} & frame pointer，指向目前這個函式的 frame 底部，區域變數用 \code{rbp-0x??} 定址。\\
+\code{rip} & 下一條要執行的指令。\textbf{控制它就控制流程}。\\
+\code{call} & 把下一條指令的位址（return address）push 到 stack，然後跳過去。\\
+\code{ret} & 從 stack 彈出 8 bytes 丟進 \code{rip}。\\
+對齊 & 在\textbf{執行 \code{call} 之前}，\code{rsp} 必須是 16 的倍數；
+  所以進入一個函式時（\code{call} 剛 push 完），\code{rsp} 會是 $16n+8$。\\
+\bottomrule
+\end{longtable}
+
+\subsection{Stack frame：一個函式的長相}
+
+編譯器（\code{-O0}）對每個函式都套同一個模板：
+
+\begin{lstlisting}[style=asm]
+函式開頭 (prologue)          函式結尾 (epilogue)
+  push rbp                     leave      ; = mov rsp,rbp ; pop rbp
+  mov  rbp, rsp                ret        ; = pop rip
+  sub  rsp, 0x40               (先把 rbp 還原，再彈出 return address)
+  ... 區域變數在 rbp-0x40 ...
+\end{lstlisting}
+
+畫成圖就是這樣（位址由下往上增加）：
+
+\begin{center}
+\begin{tikzpicture}[font=\ttfamily\small,node distance=1pt]
+  \node[draw,fill=orange!15,minimum width=7.4cm,minimum height=0.62cm] (ret)
+       {return address \hfill \textcolor{gray}{$\leftarrow$ \code{ret} 會 pop 這個進 rip}};
+  \node[draw,fill=blue!12,minimum width=7.4cm,minimum height=0.62cm,below=of ret] (rbp)
+       {saved rbp（呼叫者的 rbp）\hfill \textcolor{gray}{$\leftarrow$ \code{rbp} 指這裡}};
+  \node[draw,fill=green!12,minimum width=7.4cm,minimum height=1.5cm,below=of rbp] (buf)
+       {區域變數 / 緩衝區 \quad(\code{rbp-0x40} \dots\ \code{rbp-0x01})
+        \hfill \textcolor{gray}{$\leftarrow$ \code{rsp}}};
+  \node[left=6pt of buf,font=\ttfamily\scriptsize,text=gray] {低位址};
+  \node[left=6pt of ret,font=\ttfamily\scriptsize,text=gray] {高位址};
+  \draw[->,thick,red] ($(ret.north west)+(-0.9,0)$) -- ($(ret.south west)+(-0.9,0)$);
+\end{tikzpicture}
+\end{center}
+
+\begin{keybox}[這張圖就是 pwn 的全部起點]
+\code{buf} 的大小是 \code{0x40}。如果你能\textbf{寫超過 0x40 個 byte}，
+就會依序蓋掉：saved rbp（+0x40 到 +0x47），再來是 return address（+0x48 到 +0x4f）。
+所以「offset 到 return address」的公式是：
+
+\[
+\boxed{\text{offset} = \text{buffer 大小} + 8}
+\]
+
+那個 \code{+8} 就是 saved rbp。ret2win 這題 buffer 是 \code{0xa} bytes，
+所以 offset $= 0xa + 8 = 18$。
+\end{keybox}
+
+\subsection{為什麼 overflow 就能控制 rip}
+
+因為 \code{ret} 是「從 \code{rsp} 指的地方 pop 8 bytes 丟進 \code{rip}」——
+而你剛剛把 return address 蓋掉了。於是函式要返回時，\code{rip} 就變成你寫的值。
+
+\begin{center}
+\begin{tikzpicture}[font=\ttfamily\small,node distance=1pt]
+  \node[draw,fill=orange!15,minimum width=6.6cm,minimum height=0.6cm] (r1)
+       {return address = 你寫的值};
+  \node[draw,fill=blue!12,minimum width=6.6cm,minimum height=0.6cm,below=of r1] (b1)
+       {rbp = AAAAAAAA};
+  \node[draw,fill=green!12,minimum width=6.6cm,minimum height=1.4cm,below=of b1] (c1)
+       {buffer = AAAA\dots AAAA};
+  \node[draw,fill=orange!15,minimum width=6.6cm,minimum height=0.6cm,right=1.6cm of r1] (r2)
+       {return address = \code{win()}};
+  \node[draw,fill=blue!12,minimum width=6.6cm,minimum height=0.6cm,below=of r2] (b2)
+       {rbp = AAAAAAAA};
+  \node[draw,fill=green!12,minimum width=6.6cm,minimum height=1.4cm,below=of b2] (c2)
+       {buffer = AAAA\dots AAAA};
+  \draw[->,very thick] ($(c1.east)+(0.3,0.8)$) -- node[above,font=\sffamily\scriptsize]{overflow} ($(c2.west)+(-0.3,0.8)$);
+\end{tikzpicture}
+\end{center}
+
+\subsection{怎麼找 offset？三種方法}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=3pt]
+  \item \textbf{看組語（最準）}：找 \code{gets}/\code{read} 的參數是從哪個 \code{rbp-0x??} 開始。
+        ret2win 的 \code{hello}：
+\begin{lstlisting}[style=asm]
+401220:  lea    rax,[rbp-0xa]     ; <-- buffer 在 rbp-0xa
+401224:  mov    rdi,rax
+40122c:  call   4010d0 <gets@plt>
+\end{lstlisting}
+        $\Rightarrow$ buffer $= \code{0xa}$，offset $= \code{0xa}+8=\code{18}$。
+
+  \item \textbf{cyclic pattern（最快）}：送一串不重複的字串，看 \code{rip} 變成哪四個字母。
+\begin{lstlisting}[style=py]
+io.sendline(cyclic(200))
+io.wait()
+core = io.corefile                 # 或 gdb 看 SIGSEGV 時的 rip
+print(cyclic_find(core.read(core.rsp, 4)))   # -> offset
+\end{lstlisting}
+
+  \item \textbf{gdb}：在 \code{ret} 上下斷點，看 \code{rsp} 與 buffer 差多少。
+        \code{pwndbg} 的 \code{cyclic -l} 也可以反向查。
+\end{enumerate}
+
+\subsection{再深入一點：每個防禦機制實際上在做什麼}
+
+\subsubsection{Canary}
+
+\begin{lstlisting}[style=asm]
+; prologue
+mov  rax, qword ptr fs:0x28    ; 從 TLS 讀出 canary
+mov  qword ptr [rbp-0x8], rax  ; 放在 buffer 和 return address 中間
+; epilogue
+mov  rdx, qword ptr [rbp-0x8]
+sub  rdx, qword ptr fs:0x28    ; 有沒有被改？
+jne  __stack_chk_fail
+\end{lstlisting}
+
+\begin{warnbox}[canary 的最後一個 byte 一定是 \code{0x00}]
+這是刻意的：讓 \code{printf("\%s")} 之類的字串輸出「遇到 canary 就停」，
+避免不小心洩漏。想 leak canary 時記得，只要覆蓋到它的第一個 byte 就會壞。
+\end{warnbox}
+
+\subsubsection{PIE 與 leak}
+
+PIE 只是把所有程式碼位址加上一個隨機的 \code{base}。所以：
+
+\[
+\code{實際位址} = \code{base} + \code{檔案內 offset}
+\]
+
+只要你 leak 到\textbf{任何一個程式碼位址}，就能反推 \code{base}。
+例如 soul-archive 題目會直接印 \code{Inspect Callback: 0x55...3a9}，
+而 \code{inspect_human} 的檔案內 offset 是 \code{0x13a9}，於是 \code{base = leak - 0x13a9}。
+
+\begin{keybox}[判斷 leak 對不對]
+PIE \code{base} \textbf{一定是 page 對齊}（結尾是 \code{000}）。
+算出來不是 \code{0x...000} 就是 offset 猜錯了。
+\end{keybox}
+
+\subsubsection{ASLR：heap 基底和 PIE 基底沒有關係}
+\label{sec:heap-pie-independent}
+
+這一點非常重要，因為它會直接決定 soul-vault 那題怎麼打。很多人以為
+「leak 到 heap $\Rightarrow$ 可以推出 PIE」，\textbf{錯}。
+
+Linux 對 PIE 與 brk（heap）使用不同的隨機化：heap 的起點由 \code{arch_randomize_brk()} 決定，
+和 PIE 的 \code{base} 完全獨立。實測 soul-vault 連續跑六次，記錄 PIE 基底與 heap 基底的差：
+
+\begin{lstlisting}[style=raw]
+pie=0x55f9edfeb000 heap=0x55fa060a1000  delta=0x180b6000
+pie=0x55eea261a000 heap=0x55eeaa58f000  delta=0x7f75000
+pie=0x55735016e000 heap=0x55738d069000  delta=0x3cefb000
+pie=0x55b8dd90f000 heap=0x55b913f99000  delta=0x3668a000
+pie=0x56280fc1c000 heap=0x56282c794000  delta=0x1cb78000
+pie=0x55b87131f000 heap=0x55b8af28e000  delta=0x3df6f000
+\end{lstlisting}
+
+差值每次都不一樣（最大到 32 MB）。結論：
+
+\begin{whybox}[所以 soul-vault 的真正難點]
+題目本身\textbf{完全沒有任何 \code{\%p}}，也就是沒有任何現成的位址洩漏。
+你 leak 得到 heap（heap 上的 \code{fd} 就是位址），但\textbf{推不出 PIE}，
+而 \code{stone_state} 這些全域變數都在 PIE 的 \code{.bss} 裡。
+第 \ref{chap:vault} 章會示範怎麼在不認識任何 PIE 位址的情況下，
+硬是從 heap 上「挖」出一個程式碼位址——那是這五題裡最漂亮的一段。
+\end{whybox}
+
+\subsubsection{NX 與 ROP}
+
+NX 讓 stack 不能執行，所以你不能把 shellcode 放進 buffer 再跳過去。替代方案是
+\textbf{return-oriented programming}：不注入程式碼，而是\textbf{串接程式裡本來就有的小片段}。
+第 \ref{chap:rop} 章會從零開始講。
+
+\subsubsection{RELRO 與 GOT}
+
+\begin{longtable}{@{}p{3.4cm}p{11.6cm}@{}}
+\toprule
+\textbf{種類} & \textbf{差別}\\
+\midrule
+Partial RELRO & GOT 可寫。傳統攻擊會改 GOT 讓某個函式指向 \code{system}。\\
+Full RELRO &
+  載入時就把所有符號解析完（\code{-z now}），然後 \code{mprotect} 把 GOT 設成唯讀。
+  $\Rightarrow$ 改 GOT 行不通。\\
+\bottomrule
+\end{longtable}
+
+這五題全部都是 Partial（ret2win、weakness）或 Full RELRO（三題 heap），
+但我們的解法都不需要動 GOT。

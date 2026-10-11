@@ -1,0 +1,228 @@
+\section{開始之前：環境與工具}
+
+這一章沒有講漏洞，但它是整份講義最實用的一章。原因很簡單：\textbf{pwn 題目有九成的挫折感來自環境不對}，
+而不是你觀念不會。你在後面幾章會看到，這五題裡面有一題（house-of-water）的難點根本不是漏洞，
+而是題目附的 loader 與 libc 版本不一致。
+
+\subsection{你需要準備什麼}
+
+\begin{longtable}{@{}p{3.5cm}p{11.5cm}@{}}
+\toprule
+\textbf{工具} & \textbf{用途與安裝}\\
+\midrule
+\endhead
+\code{python3} + \code{pwntools} &
+  所有腳本的骨架。\code{pip install --user pwntools}。
+  \code{process()} 起程式、\code{remote()} 連遠端、\code{p64()} 打包位址、\code{u64()} 解位址。\\
+\code{gdb} + \code{pwndbg}/\code{gef} &
+  看 heap 佈局、看 stack、單步。本講義會用 \code{x/8gx} 這種指令直接讀記憶體。\\
+\code{ROPgadget} &
+  掃 gadget，例如 \code{pop rdi ; ret}。\code{pip install --user ROPgadget}。\\
+\code{checksec} &
+  看防禦機制。pwntools 內建：\code{ELF(path).checksec()}，不必另外裝。\\
+\code{patchelf} &
+  改 ELF 的 interpreter 與 rpath，讓題目用指定的 libc 跑。\\
+\code{objdump} / \code{readelf} &
+  逆組語、看節區與符號表。\code{objdump -d -M intel} 是人看的格式。\\
+\bottomrule
+\end{longtable}
+
+\begin{keybox}[本講義的起手式]
+每一題都從這三件事開始：
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt]
+  \item \code{checksec}：有沒有 canary / PIE / NX / RELRO。
+  \item 找 \code{main}：看它呼叫了什麼、flag 怎麼被印出來、有沒有 \code{gets}/\code{read} 這種不限長度的輸入。
+  \item 找「目標」：能把 \code{rip} 指到哪一個函式？還是要拿到 shell？
+\end{enumerate}
+\end{keybox}
+
+\subsection{五個防禦機制速查}
+
+這張表請記牢，後面每一題都會用到。
+
+\begin{longtable}{@{}p{2.6cm}p{12.4cm}@{}}
+\toprule
+\textbf{機制} & \textbf{它在防什麼、你看到它要怎麼想}\\
+\midrule
+\endhead
+Canary &
+  在 return address 前面塞一個隨機值（\code{fs:0x28}）。函式返回前檢查有沒有被改。
+  有的話就 \code{*** stack smashing detected ***} 然後 abort。
+  $\Rightarrow$ 想 overflow 就必須\textbf{先洩漏 canary 再原封不動塞回去}，或改打 heap。\\
+PIE &
+  Position Independent Executable。程式碼被載入到\textbf{隨機基底}，你逆出來的 \code{0x125e} 實際位址是
+  \code{base + 0x125e}。 $\Rightarrow$ 必須先 leak 一個程式碼位址，算出 \code{base}。\\
+ASLR &
+  核心層級的隨機化。把 stack、heap、libc、PIE 的基底都隨機化。
+  \textbf{注意：heap 基底與 PIE 基底是各自獨立的}（見 \ref{sec:heap-pie-independent}）。\\
+NX &
+  Non-eXecutable。stack / heap 標成不可執行。$\Rightarrow$ 把 shellcode 塞進 buffer 再跳過去行不通，
+  要改用 \textbf{ROP}（第 \ref{chap:rop} 章）。\\
+RELRO &
+  Relocation Read-Only。Full RELRO 會把 GOT 在載入後設成唯讀。
+  $\Rightarrow$ 不能改 GOT，但 heap 攻擊通常也不需要。\\
+SHSTK / IBT (CET) &
+  Intel CET 的硬體防護。ELF 上只是一個 \emph{屬性位元}，
+  \textbf{核心沒有真的啟用時完全沒有作用}。本系列的五題都沒啟用，
+  所以可以跳進沒有 \code{endbr64} 的位址。\\
+\bottomrule
+\end{longtable}
+
+\begin{warnbox}[checksec 的 SHSTK/IBT 常常是嚇人的]
+本系列每一題 \code{checksec} 都寫 \code{SHSTK: Enabled, IBT: Enabled}，
+但實際上直接跳到 \code{system@plt+4}（沒有 \code{endbr64} 的位置）也照跑。
+判斷方式是：\emph{先試}，真的 SIGSEGV 在 \code{endbr64} 相關位址再處理。
+\end{warnbox}
+
+\subsection{第一步：看防禦機制}
+
+\begin{lstlisting}[style=py]
+from pwn import *
+elf = ELF('chal', checksec=False)   # checksec=False 先不要印，避免雜訊
+print(elf.checksec())
+\end{lstlisting}
+
+\begin{lstlisting}[style=raw]
+RELRO:      Full RELRO
+Stack:      Canary found
+NX:         NX enabled
+PIE:        PIE enabled
+\end{lstlisting}
+
+看到 \code{Canary found} + \code{PIE enabled}，就幾乎可以斷定：
+\textbf{這題不是「覆蓋 return address」的題型，而是 heap 題}。
+這五題裡面有兩題（ret2win、weakness）是 \code{No canary found} + \code{No PIE}，
+另外三題都是 canary + PIE $\rightarrow$ 全部走 heap。
+
+\subsection{踩雷實錄：題目附的 ld 跟 libc 版本不一致}
+\label{sec:toolchain}
+
+這一段請務必看完。它花掉的心力比三題漏洞加起來還多。
+
+\subsubsection{症狀}
+
+題目壓縮檔裡通常會附上它用的 \file{libc.so.6} 與 \file{ld-linux-x86-64.so.2}，
+用意是「請用這一份 libc 跑，這樣位址偏移才會一致」。
+所以標準做法是：
+
+\begin{lstlisting}[style=sh]
+patchelf --set-interpreter ./ld-linux-x86-64.so.2 --set-rpath . ./chal --output chal_patched
+./chal_patched
+\end{lstlisting}
+
+這次跑出來的結果是：
+
+\begin{lstlisting}[style=raw]
+*** stack smashing detected ***: terminated
+\end{lstlisting}
+
+\textbf{還沒輸入任何東西就爆 canary}。這不是你的漏洞打錯，是環境壞了。
+
+\subsubsection{診斷}
+
+分別問 libc 與 ld 自己的版本：
+
+\begin{lstlisting}[style=sh]
+$ strings -a libc.so.6 | grep "GNU C Library"
+GNU C Library (Ubuntu GLIBC 2.35-0ubuntu3.15) stable release version 2.35.
+
+$ ./ld-linux-x86-64.so.2 --version
+ld.so (Ubuntu GLIBC 2.39-0ubuntu8.8) stable release version 2.39.
+\end{lstlisting}
+
+\begin{warnbox}[一句話總結這個雷]
+\file{ld.so} 與 \file{libc.so.6} \textbf{必須是同一版 glibc}。
+題目把 2.35 的 libc 跟 2.39 的 loader 包在一起，兩者對 TLS（canary 就放在 TLS 裡）、
+符號版本、內部結構的認知不同，於是程式一啟動 canary 檢查就失敗。
+\end{warnbox}
+
+\begin{whybox}[為什麼 canary 會壞掉？]
+glibc 的 stack canary 存在 TLS（thread-local storage）裡，而 \textbf{TLS 的佈局是 loader 決定的}。
+2.35 的 libc 假設 canary 在 TLS 的某個位置，2.39 的 loader 卻把它放在另一個位置，
+於是 libc 初始化時讀到錯誤的值，函式返回時一檢查就「被竄改」。
+換句話說：\textbf{版本不符 = 一啟動就死，跟你的 exploit 完全無關}。
+\end{whybox}
+
+\subsubsection{解法：自己湊一組版本一致的 toolchain}
+
+要拿到 2.35 的 loader，最直接的方式是抓對應版本的 Ubuntu 套件：
+
+\begin{lstlisting}[style=sh]
+# 1. 下載跟題目 libc 同版本的 libc6 deb
+wget http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.35-0ubuntu3.15_amd64.deb
+
+# 2. 解開（放進一個自己的空目錄，不要跟題目檔案混在一起）
+mkdir -p /tmp/deb && dpkg-deb -x libc6_2.35-0ubuntu3.15_amd64.deb /tmp/deb
+
+# 3. 組出 toolchain 目錄
+mkdir -p toolchain
+cp /tmp/deb/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2  toolchain/ld-2.35.so
+cp /tmp/deb/lib/x86_64-linux-gnu/libc.so.6             toolchain/libc.so.6
+\end{lstlisting}
+
+\begin{keybox}[一定要驗證 libc 一模一樣]
+不要只是「版本號看起來一樣」就相信，直接比對雜湊：
+
+\begin{lstlisting}[style=sh]
+$ md5sum 題目附的/libc.so.6 toolchain/libc.so.6
+dc315a923a7f751910a9f3a8ecac61c6  題目附的/libc.so.6
+dc315a923a7f751910a9f3a8ecac61c6  toolchain/libc.so.6     <-- 一致，安心
+\end{lstlisting}
+\end{keybox}
+
+接著用這組 toolchain 重新 patch：
+
+\begin{lstlisting}[style=sh]
+patchelf --set-interpreter /abs/path/toolchain/ld-2.35.so \
+         --set-rpath       /abs/path/toolchain \
+         ./chal --output ./chal_patched
+./chal_patched        # 應該要正常印出選單
+\end{lstlisting}
+
+\begin{warnbox}[兩個小細節]
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \textbf{一定要用絕對路徑}。用相對路徑時，只要你換個目錄執行就會找不到 loader 或 libc。
+  \item \code{--set-rpath} 要指向\textbf{裝著 libc.so.6 的那個目錄}，
+        這樣 loader 就知道要去哪裡找它要配對的 libc。
+\end{itemize}
+\end{warnbox}
+
+驗證成功的話，直接執行會看到選單：
+
+\begin{lstlisting}[style=raw]
+1) malloc
+2) free
+3) edit
+4) show
+5) exit
+>
+\end{lstlisting}
+
+\begin{keybox}[一句話心法]
+\textbf{先讓程式「乾淨地跑起來」，再開始想漏洞。}
+如果連選單都印不出來，你 debug 的對象是環境，不是你的 exploit。
+\end{keybox}
+
+\subsection{每一題的固定開場}
+
+\begin{lstlisting}[style=py]
+import os, re, sys
+from pwn import *
+
+context.arch = 'amd64'
+context.log_level = 'info'
+
+ROOT = '/abs/path/to/pwn'                 # 一律絕對路徑，避免 cwd 被改掉
+BIN  = os.path.join(ROOT, 'solve/vault/soul_vault_patched')
+elf  = ELF(BIN, checksec=False)
+
+def start():
+    if args.REMOTE:                        # python3 exp.py REMOTE HOST=... PORT=...
+        return remote(args.HOST or 'localhost', int(args.PORT or 1337))
+    return process(BIN, cwd=os.path.dirname(BIN))   # cwd = 題目目錄（flag 檔在那）
+\end{lstlisting}
+
+\begin{keybox}[\code{cwd} 很重要]
+\code{process(BIN, cwd=...)} 讓子行程在題目目錄裡執行。
+很多題目的 flag 是 \code{./flag.txt}，工作目錄不對就會「拿到 shell 卻 cat 不到 flag」。
+\end{keybox}
